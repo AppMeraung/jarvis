@@ -1,0 +1,38 @@
+JARVIS - pembantu suara AI untuk Mac
+====================================
+
+Keperluan
+- Mac dengan macOS 13 atau lebih baru
+- Node.js 20 atau lebih baru (percuma, https://nodejs.org)
+- Google Chrome (disyorkan) atau Safari
+- Kunci API Gemini anda sendiri (percuma, https://aistudio.google.com/apikey)
+
+Pasang
+1. Klik kanan install.command, pilih Open, kemudian Open sekali lagi.
+   (Kali pertama macOS akan bertanya kerana fail ini dimuat turun dari internet.)
+2. Jarvis terbuka sendiri. Tekan TETAPAN, tampal kunci API Gemini, tekan SIMPAN.
+3. Tekan MULA dan benarkan mikrofon. Cakap terus.
+
+Kebenaran macOS
+Kali pertama Jarvis mengawal sesuatu app (Mail, Calendar, Spotify...), macOS akan bertanya. Tekan Allow.
+Untuk menaip, pintasan papan kekunci dan main lagu automatik: System Settings > Privacy & Security > Accessibility > benarkan "node".
+Untuk Jarvis melihat skrin: System Settings > Privacy & Security > Screen & System Audio Recording > benarkan "node".
+
+Kawalan anda
+Di TETAPAN ada suis untuk setiap kumpulan (Spotify, emel, kalendar, fail...). Matikan apa yang anda tidak mahu Jarvis sentuh.
+Tindakan berisiko (hantar emel, padam fail, arahan shell, restart) sentiasa minta pengesahan anda di skrin.
+
+Privasi
+Jarvis berjalan di Mac anda. Suara anda, dan apa-apa yang Jarvis semak untuk menjawab (emel, kalendar, kenalan, tangkapan skrin),
+dihantar kepada Google Gemini menggunakan kunci API anda. Kos penggunaan Gemini ditanggung oleh akaun Google anda.
+
+Jarvis Mini
+Selepas dipasang, buka "Jarvis Mini" dari folder Applications anda untuk kepala kecil yang terapung di tepi skrin.
+Seret kepalanya untuk alih; butang x menutupnya. Jarvis utama mesti sedang berjalan.
+
+Buang
+Dwiklik uninstall.command.
+
+---
+ENGLISH: Right-click install.command > Open. Paste your own Gemini API key in TETAPAN (Settings), press SIMPAN (Save), then MULA (Start).
+To remove, run uninstall.command.

@@ -1,0 +1,5 @@
+.env
+permissions.json
+dist
+face.jpg
+.DS_Store

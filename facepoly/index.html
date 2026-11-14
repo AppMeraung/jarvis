@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="ms">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FacePoly</title>
+<style>
+  :root {
+    --fp-eye: #59d8ff;      /* eye and light colour */
+    --fp-metal-h: 215;      /* metal hue */
+    --fp-metal-s: 12%;      /* metal saturation */
+    --fp-speed: 1;          /* idle animation speed multiplier */
+    --fp-bg: transparent;
+  }
+  html, body { margin: 0; height: 100%; background: var(--fp-bg); }
+  body { display: flex; align-items: center; justify-content: center; overflow: hidden;
+    font: 13px/1.4 system-ui, sans-serif; }
+  #facepoly { width: min(94vw, 78vh, 560px); aspect-ratio: 400 / 480; }
+  #facepoly svg { width: 100%; height: 100%; display: block; overflow: visible; touch-action: none; }
+  .fp-eye { fill: var(--fp-eye); }
+  #fp-toggle, #fp-panel { position: fixed; right: 10px; z-index: 2; }
+  #fp-toggle { bottom: 10px; border: 1px solid #8aa; border-radius: 999px; background: #10161dcc; color: #dff;
+    padding: 6px 12px; cursor: pointer; font: inherit; }
+  #fp-panel { bottom: 48px; width: min(250px, calc(100vw - 20px)); background: #10161df2; color: #dff; border: 1px solid #456;
+    border-radius: 10px; padding: 10px; display: grid; gap: 8px; }
+  #fp-panel label { display: grid; gap: 3px; }
+  #fp-panel select, #fp-panel input, #fp-panel button { font: inherit; }
+  #fp-panel .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  #fp-panel button { background: #1c2733; color: #dff; border: 1px solid #567; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  #fp-panel button:hover, #fp-panel button:focus-visible, #fp-toggle:focus-visible { outline: 2px solid var(--fp-eye); outline-offset: 1px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="facepoly"></div>
+
+<button id="fp-toggle" aria-expanded="false" aria-controls="fp-panel">⚙ Demo</button>
+<div id="fp-panel" hidden>
+  <label>Ekspresi <select id="fp-expr"></select></label>
+  <label>Intensity <input id="fp-int" type="range" min="0" max="1" step="0.05" value="1"></label>
+  <div class="row">
+    <button data-act="blink">Blink</button>
+    <button data-act="winkL">Wink kiri</button>
+    <button data-act="winkR">Wink kanan</button>
+    <button data-act="speak">Speaking demo</button>
+  </div>
+  <label>Latar <select id="fp-bg"><option value="transparent">Transparent</option><option value="#ffffff">Putih</option></select></label>
+  <div class="row">
+    <button data-act="reset">Reset neutral</button>
+    <button data-act="hide">Sembunyi panel sepenuhnya</button>
+  </div>
+</div>
+
+<script>
+/*
+  FacePoly: animated polygon robot head for a chatbot. Everything is in this file; no dependencies.
+
+  Chatbot flow:
+    user starts talking   -> FacePoly.setListening(true)
+    AI is working         -> FacePoly.setListening(false); FacePoly.setExpression('thinking')
+    AI starts answering   -> FacePoly.react({ emotion: 'happy', speaking: true });
+                             FacePoly.speakFromAudio(audioEl, visemeTimelineOrNull)
+    audio ends            -> FacePoly goes back to REST by itself; FacePoly.setExpression('neutral')
+    an error happens      -> FacePoly.setExpression('sad')   // or 'confused'
+
+  Sides ("left"/"right") mean the side as seen on screen.
+  Add ?panel=0 to the URL to embed without the demo panel.
+*/
+(() => {
+'use strict';
+const NS = 'http://www.w3.org/2000/svg';
+const root = document.getElementById('facepoly');
+const listeners = new AbortController();
+const on = (target, type, fn) => target.addEventListener(type, fn, { signal: listeners.signal });
+const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const num = (v, fallback) => (typeof v === 'number' && isFinite(v) ? v : fallback);
+
+// ---------- Drawing ----------
+const el = (tag, attrs, parent) => {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+};
+const pts = p => p.map(q => q.join(',')).join(' ');
+const flip = p => p.map(([x, y]) => [400 - x, y]);
+const metal = l => `hsl(var(--fp-metal-h) var(--fp-metal-s) ${l}%)`;
+const poly = (parent, p, light, extra) => {
+  const n = el('polygon', { points: pts(p), ...extra }, parent);
+  if (light != null) n.style.fill = metal(light);
+  return n;
+};
+// Draws a facet on the left and its mirror on the right; the right is darker because the light comes from the left.
+const both = (parent, p, light) => { poly(parent, p, light); poly(parent, flip(p), light - 6); };
+
+const svg = el('svg', { viewBox: '0 0 400 480', role: 'img', 'aria-label': 'Animated FacePoly chatbot avatar' }, root);
+const defs = el('defs', {}, svg);
+const blur = (id, sd) => el('feGaussianBlur', { stdDeviation: sd }, el('filter', { id, x: '-80%', y: '-80%', width: '260%', height: '260%' }, defs));
+blur('fp-soft', 3.5); blur('fp-halo', 9);
+const sheen = el('linearGradient', { id: 'fp-sheen', x1: 0, y1: 0, x2: 1, y2: 1 }, defs);
+el('stop', { offset: 0, 'stop-color': '#fff', 'stop-opacity': .22 }, sheen);
+el('stop', { offset: .45, 'stop-color': '#fff', 'stop-opacity': 0 }, sheen);
+el('stop', { offset: 1, 'stop-color': '#000', 'stop-opacity': .28 }, sheen);
+
+const OUTLINE = [[200, 46], [252, 56], [288, 94], [300, 160], [296, 246], [274, 326], [234, 384], [166, 384], [126, 326], [104, 246], [100, 160], [112, 94], [148, 56]];
+const SOCKET = [[124, 214], [138, 201], [166, 199], [182, 213], [168, 224], [136, 225]];
+
+const all = el('g', {}, svg);
+// Shoulders and neck
+const back = el('g', {}, all);
+poly(back, [[40, 480], [96, 440], [150, 428], [250, 428], [304, 440], [360, 480]], 27);
+poly(back, [[96, 440], [150, 428], [170, 480], [40, 480]], 34);
+poly(back, [[150, 428], [250, 428], [232, 480], [168, 480]], 20);
+poly(back, [[166, 366], [234, 366], [246, 440], [154, 440]], 12);
+for (let y = 392; y < 440; y += 12) el('line', { x1: 160, y1: y, x2: 240, y2: y, stroke: '#000', 'stroke-opacity': .5, 'stroke-width': 3 }, back);
+el('ellipse', { cx: 200, cy: 388, rx: 30, ry: 12, fill: '#000', opacity: .55, filter: 'url(#fp-soft)' }, back);
+
+const head = el('g', {}, all);
+// Ear pods sit behind the skull and move against it, which sells the turn.
+const ears = el('g', {}, head);
+const earLights = [];
+for (const m of [p => p, flip]) {
+  const [[cx, cy]] = m([[92, 214]]);
+  el('circle', { cx, cy, r: 28 }, ears).style.fill = metal(17);
+  el('circle', { cx, cy, r: 18 }, ears).style.fill = metal(33);
+  earLights.push(poly(ears, m([[84, 200], [90, 200], [90, 228], [84, 228]]), null, { class: 'fp-eye', filter: 'url(#fp-soft)' }));
+}
+const shell = el('g', {}, head);
+poly(shell, OUTLINE, 9);
+const plates = el('g', {}, head);
+both(plates, [[200, 46], [148, 56], [160, 110], [200, 104]], 47);
+both(plates, [[148, 56], [112, 94], [124, 150], [160, 110]], 37);
+both(plates, [[200, 104], [160, 110], [124, 150], [138, 178], [200, 170]], 52);
+both(plates, [[112, 94], [100, 160], [104, 246], [122, 214], [124, 150]], 28);
+both(plates, [[124, 150], [138, 178], [200, 170], [200, 196], [186, 232], [160, 240], [122, 214]], 31);
+both(plates, [[200, 196], [186, 232], [180, 262], [176, 298], [200, 298]], 45);
+const lamp = poly(plates, [[200, 66], [207, 74], [200, 82], [193, 74]], null, { class: 'fp-eye', filter: 'url(#fp-soft)' });
+const cheeks = el('g', {}, head);
+both(cheeks, [[122, 214], [104, 246], [126, 324], [150, 298], [160, 240]], 41);
+both(cheeks, [[160, 240], [150, 298], [176, 298], [180, 262], [186, 232]], 49);
+const jaw = el('g', {}, head);
+both(jaw, [[150, 302], [200, 302], [200, 352], [176, 352], [126, 328]], 36);
+both(jaw, [[126, 328], [176, 352], [166, 384]], 29);
+poly(jaw, [[176, 352], [224, 352], [234, 384], [166, 384]], 43);
+const shadeL = poly(head, OUTLINE.filter(p => p[0] <= 200), null, { fill: '#000', opacity: 0 });
+const shadeR = poly(head, OUTLINE.filter(p => p[0] >= 200), null, { fill: '#000', opacity: 0 });
+const gloss = poly(head, OUTLINE, null, { fill: 'url(#fp-sheen)' });
+
+// Eyes, brows and mouth
+const feat = el('g', {}, head);
+const eyes = [SOCKET, flip(SOCKET)].map((socket, i) => {
+  const cx = i ? 247 : 153, cy = 212;
+  el('polygon', { points: pts(socket) }, el('clipPath', { id: 'fp-clip' + i }, defs));
+  const halo = el('ellipse', { cx, cy, rx: 34, ry: 18, class: 'fp-eye', filter: 'url(#fp-halo)' }, feat);
+  const scale = el('g', {}, feat);
+  poly(scale, socket, 5);
+  const inner = el('g', { 'clip-path': `url(#fp-clip${i})` }, scale);
+  const glow = el('ellipse', { cx, cy, rx: 22, ry: 11, class: 'fp-eye', filter: 'url(#fp-soft)' }, inner);
+  const core = el('ellipse', { cx, cy, rx: 8, ry: 5.5, fill: '#fff' }, inner);
+  const lid = el('rect', { x: cx - 36, y: 188, width: 72, height: 0 }, inner);
+  const low = el('rect', { x: cx - 36, y: 226, width: 72, height: 16 }, inner);
+  lid.style.fill = low.style.fill = metal(38);
+  el('polygon', { points: pts(socket), fill: 'none', stroke: '#000', 'stroke-width': 1.5, 'stroke-opacity': .7 }, scale);
+  const brow = el('polygon', {}, feat);
+  brow.style.fill = metal(64);
+  return { cx, cy, halo, scale, glow, core, lid, low, brow, sign: i ? 1 : -1 };
+});
+const mouthClip = el('path', {}, el('clipPath', { id: 'fp-mouth' }, defs));
+const mouth = el('path', { fill: '#04070b' }, feat);
+const mouthIn = el('g', { 'clip-path': 'url(#fp-mouth)' }, feat);
+const teeth = el('rect', { fill: '#dfe9f5', height: 0 }, mouthIn);
+const tongue = el('ellipse', { fill: '#5a7bd0', rx: 0, ry: 0 }, mouthIn);
+const lips = el('path', { fill: 'none', 'stroke-width': 2.6, 'stroke-linejoin': 'round' }, feat);
+lips.style.stroke = metal(66);
+const nose = el('g', {}, head);
+poly(nose, [[200, 186], [190, 236], [180, 262], [200, 270]], 40);
+poly(nose, [[200, 186], [210, 236], [220, 262], [200, 270]], 60);
+poly(nose, [[180, 262], [200, 270], [220, 262], [200, 282]], 24);
+
+// ---------- Expressions and visemes ----------
+// Brow offsets are pixels (negative = up). Lids and squints run 0..1. Angles are degrees.
+const ZERO = { bInL: 0, bInR: 0, bOutL: 0, bOutR: 0, lidL: 0, lidR: 0, sqL: 0, sqR: 0, eye: 0, glow: 0, smile: 0, cheek: 0,
+  mOpen: 0, mWidth: 0, mRound: 0, mX: 0, gx: 0, gy: 0, yaw: 0, pitch: 0, roll: 0, speed: 0 };
+const sym = o => { // "bIn: 5" means both sides
+  const r = { ...o };
+  for (const k of ['bIn', 'bOut', 'lid', 'sq']) if (k in r) { r[k + 'L'] = r[k + 'R'] = r[k]; delete r[k]; }
+  return r;
+};
+const EXPR = Object.fromEntries(Object.entries({
+  neutral: {},
+  happy: { smile: .8, sq: .35, cheek: 1, bOut: -2, glow: .15 },
+  excited: { smile: 1, mOpen: .35, mWidth: .15, eye: .18, bIn: -5, bOut: -6, glow: .45, cheek: 1 },
+  angry: { bIn: 8, bOut: -3, lid: .2, sq: .25, smile: -.35, mWidth: -.12, pitch: 4, glow: .2 },
+  sad: { bIn: -7, bOut: 3, lid: .25, gy: .5, smile: -.6, pitch: 6, glow: -.25 },
+  thinking: { gx: -.6, gy: -.7, bInL: -6, bOutL: -6, mX: 7, mWidth: -.25, smile: .1, yaw: -6, pitch: -4, roll: -2 },
+  confused: { bInL: -7, bOutL: -5, bInR: 4, bOutR: 1, roll: 7, mX: -4, mWidth: -.15, sqR: .2 },
+  surprised: { eye: .3, bIn: -9, bOut: -8, mOpen: .65, mRound: .8, mWidth: -.2, glow: .3 },
+  daydreaming: { lid: .45, gx: .5, gy: -.4, smile: .2, yaw: 5, pitch: -3, speed: -.6, glow: -.15 },
+  wink: { lidR: 1, sqR: .6, smile: .5, cheek: .6, bOutR: 2, roll: 3 },
+  listening: { bIn: -2, bOut: -2, eye: .06, pitch: 2, roll: 2, glow: .1 },
+  speaking: { smile: .25, bOut: -1, glow: .1 },
+}).map(([k, v]) => [k, { ...ZERO, ...sym(v) }]));
+const REST = { open: 0, width: 1, round: 0, teeth: 0, tongue: 0, press: 0, lower: 0 };
+const VIS = Object.fromEntries(Object.entries({
+  REST: {}, A: { open: .9, width: 1.05, teeth: .3 }, E: { open: .45, width: 1.25, teeth: .7 }, I: { open: .25, width: 1.35, teeth: .9 },
+  O: { open: .7, width: .8, round: .8 }, U: { open: .3, width: .6, round: 1 }, MBP: { width: .94, press: 1 },
+  FV: { open: .18, teeth: 1, lower: 1 }, L: { open: .4, teeth: .4, tongue: 1 }, WQ: { open: .2, width: .55, round: 1 },
+}).map(([k, v]) => [k, { ...REST, ...v }]));
+
+// ---------- State ----------
+let alive = true, frame = 0, last = 0, clock = 0;
+let expr = { name: 'neutral', intensity: 1, duration: 350 };
+const cur = { ...ZERO }, vis = { ...REST }, look = { x: 0, y: 0 }, turn = { yaw: 0, pitch: 0, roll: 0 };
+let manualTurn = { yaw: 0, pitch: 0, roll: 0 }, manualLook = null, pointerLook = null, pointerAt = -1e9, wander = { x: 0, y: 0 }, wanderAt = 0;
+let blinkStart = -1e9, nextBlink = 2500, winks = { L: -1e9, R: -1e9 };
+let listening = false, speakingFlag = false, manualVis = REST, hostLevel = null, hostAt = -1e9;
+let speech = null, ctx = null; // speech: { analyser, nodes, timeline, time(), bins }
+const sources = new WeakMap();
+
+const pulse = (start, length) => { // 0 -> 1 -> 0 over "length" ms
+  const p = (clock - start) / length;
+  return p <= 0 || p >= 1 ? 0 : 1 - Math.abs(p * 2 - 1);
+};
+// Without viseme data the mouth follows loudness; brightness picks wide (E/I) or round (O/U) shapes.
+const fromVolume = (vol, bright) => {
+  const open = clamp(vol * 2.2, 0, 1);
+  return { ...REST, open, width: 1 + (bright - .5) * .5 * open, round: clamp((.45 - bright) * 1.6, 0, 1) * open, teeth: clamp(bright, 0, 1) * .6 * open };
+};
+
+function mouthTarget() {
+  if (speech) {
+    const t = speech.time();
+    if (speech.timeline) {
+      let name = 'REST';
+      for (const step of speech.timeline) { if (step.time <= t) name = step.viseme; else break; }
+      if (speech.end != null && t >= speech.end) { api.stopSpeaking(); return REST; }
+      return VIS[name];
+    }
+    if (speech.analyser) {
+      speech.analyser.getByteFrequencyData(speech.bins);
+      let sum = 0, weighted = 0;
+      for (let i = 0; i < speech.bins.length; i++) { sum += speech.bins[i]; weighted += speech.bins[i] * i; }
+      const vol = sum / speech.bins.length / 255, bright = sum ? weighted / sum / speech.bins.length * 2.5 : .5;
+      return fromVolume(vol * 2.4, clamp(bright, 0, 1));
+    }
+  }
+  if (hostLevel && clock - hostAt < 250) return fromVolume(hostLevel.vol, hostLevel.bright);
+  return manualVis;
+}
+
+function update(now) {
+  if (!alive) return;
+  frame = requestAnimationFrame(update);
+  const dt = Math.min(100, now - last || 16);
+  if (dt < 12) return; // cap near 60fps on fast displays
+  last = now; clock += dt;
+  const calm = reduced.matches, t = clock / 1000;
+  const speed = (1 + cur.speed) * num(parseFloat(getComputedStyle(root).getPropertyValue('--fp-speed')), 1);
+
+  // Expression: ease every parameter toward the chosen expression.
+  const want = EXPR[expr.name], ease = 1 - Math.exp(-dt / Math.max(20, expr.duration / 3));
+  const talk = speakingFlag || !!speech || (hostLevel && clock - hostAt < 250);
+  for (const k in cur) {
+    const extra = talk && expr.name !== 'speaking' ? EXPR.speaking[k] * .5 : 0;
+    cur[k] += ((want[k] + (listening ? EXPR.listening[k] * .6 : 0)) * expr.intensity + extra - cur[k]) * ease;
+  }
+  const mt = mouthTarget(), quick = 1 - Math.exp(-dt / 45);
+  for (const k in vis) vis[k] += (mt[k] - vis[k]) * quick;
+
+  // Blinks
+  if (clock > nextBlink) { blinkStart = clock; nextBlink = clock + 2500 + Math.random() * 3500; }
+  const blink = pulse(blinkStart, 170);
+
+  // Gaze: explicit lookAt wins, then a recent pointer, then idle wandering.
+  if (clock > wanderAt) {
+    wander = calm ? { x: 0, y: 0 } : { x: (Math.random() - .5) * .7, y: (Math.random() - .5) * .35 };
+    wanderAt = clock + (1800 + Math.random() * 3200) / Math.max(.3, speed);
+  }
+  const aim = manualLook || (pointerLook && clock - pointerAt < 3000 ? pointerLook : wander);
+  const follow = 1 - Math.exp(-dt / (calm ? 40 : 140));
+  look.x += (aim.x - look.x) * follow; look.y += (aim.y - look.y) * follow;
+  const gx = clamp(cur.gx + look.x, -1, 1), gy = clamp(cur.gy + look.y, -1, 1);
+
+  // Head: expression pose + manual direction + idle drift, and it leans a little toward where the eyes look.
+  const idle = calm ? 0 : 1;
+  const nod = listening && !calm ? Math.pow(Math.max(0, Math.sin(t * 1.6)), 8) * 3 : 0;
+  const goal = {
+    yaw: clamp(cur.yaw + manualTurn.yaw + gx * 5 + idle * (Math.sin(t * .5 * speed) * 2.2 + Math.sin(t * .23 * speed + 1) * 1.3), -24, 24),
+    pitch: clamp(cur.pitch + manualTurn.pitch + gy * 3 + nod + idle * Math.sin(t * .4 * speed + 2) * 1.2 + vis.open * 1.5, -18, 18),
+    roll: clamp(cur.roll + manualTurn.roll + idle * Math.sin(t * .3 * speed) * .8, -15, 15),
+  };
+  for (const k in turn) turn[k] += (goal[k] - turn[k]) * (1 - Math.exp(-dt / 160));
+  const breathe = idle * Math.sin(t * 1.1 * speed) * 1.6;
+
+  // Layers at different depths slide by different amounts: that parallax is the 3D.
+  const layer = (g, depth, dy = 0) => g.setAttribute('transform', `translate(${(turn.yaw * depth * 1.15).toFixed(2)} ${(turn.pitch * depth * .95 + dy).toFixed(2)})`);
+  back.setAttribute('transform', `translate(0 ${(breathe * .4).toFixed(2)})`);
+  head.setAttribute('transform', `translate(0 ${breathe.toFixed(2)}) rotate(${turn.roll.toFixed(2)} 200 400)`);
+  layer(ears, -.25); layer(shell, .15); layer(plates, .55); layer(feat, 1); layer(nose, 1.6);
+  layer(cheeks, .6, -cur.cheek * 3 - Math.max(0, cur.smile) * 2);
+  const open = clamp(cur.mOpen + vis.open, 0, 1.2);
+  layer(jaw, .6, open * 7);
+  shadeL.setAttribute('opacity', (clamp(-turn.yaw / 24, 0, 1) * .42).toFixed(3));
+  shadeR.setAttribute('opacity', (clamp(turn.yaw / 24, 0, 1) * .42).toFixed(3));
+  gloss.setAttribute('transform', `translate(${(-turn.yaw * .9).toFixed(2)} ${(-turn.pitch * .6).toFixed(2)})`);
+
+  // Eyes and brows
+  const bright = clamp(1 + cur.glow, .3, 1.6);
+  for (const e of eyes) {
+    const s = e.sign < 0 ? 'L' : 'R';
+    const lid = clamp(cur['lid' + s] + blink + pulse(winks[s], 420), 0, 1), sq = clamp(cur['sq' + s], 0, 1);
+    e.scale.setAttribute('transform', `translate(${e.cx} ${e.cy}) scale(${1 + cur.eye * .45} ${1 + cur.eye}) translate(${-e.cx} ${-e.cy})`);
+    e.lid.setAttribute('height', (9 + lid * 29).toFixed(2));
+    e.low.setAttribute('y', (226 - sq * 11 - lid * 2).toFixed(2));
+    e.core.setAttribute('cx', (e.cx + gx * 7).toFixed(2));
+    e.core.setAttribute('cy', (e.cy + gy * 4).toFixed(2));
+    e.glow.setAttribute('opacity', clamp(.75 * bright, 0, 1).toFixed(3));
+    e.halo.setAttribute('opacity', (.3 * bright * (1 - lid)).toFixed(3));
+    const ox = 200 + e.sign * 80, ix = 200 + e.sign * 16, oy = 193 + cur['bOut' + s], iy = 190 + cur['bIn' + s];
+    e.brow.setAttribute('points', `${ox},${oy.toFixed(2)} ${ix},${iy.toFixed(2)} ${ix},${(iy + 7).toFixed(2)} ${ox},${(oy + 6).toFixed(2)}`);
+  }
+  const beat = listening && !calm ? .55 + .45 * Math.sin(t * 5) : .6;
+  for (const light of earLights) light.setAttribute('opacity', beat.toFixed(3));
+  lamp.setAttribute('opacity', (talk ? .5 + Math.min(.5, open) : beat).toFixed(3));
+
+  // Mouth: two curves between the corners; corners lift for a smile.
+  const round = clamp(Math.max(cur.mRound, vis.round), 0, 1);
+  const hw = 30 * clamp(1 + cur.mWidth + (vis.width - 1), .4, 1.5) * (1 - round * .45);
+  const cx = 200 + cur.mX, cy = 326, corner = cy - cur.smile * 7;
+  const up = cy - 1.5 * (1 - vis.press) - open * 3 - round * 2;
+  const low = cy + 1.5 * (1 - vis.press) + open * 26 + round * 4 - vis.lower * 5;
+  const d = `M${(cx - hw).toFixed(2)},${corner.toFixed(2)} Q${cx.toFixed(2)},${(2 * up - corner).toFixed(2)} ${(cx + hw).toFixed(2)},${corner.toFixed(2)} Q${cx.toFixed(2)},${(2 * low - corner).toFixed(2)} ${(cx - hw).toFixed(2)},${corner.toFixed(2)}Z`;
+  mouth.setAttribute('d', d); mouthClip.setAttribute('d', d); lips.setAttribute('d', d);
+  teeth.setAttribute('x', (cx - hw).toFixed(2)); teeth.setAttribute('width', (hw * 2).toFixed(2));
+  teeth.setAttribute('y', (Math.min(up, corner) - 2).toFixed(2));
+  teeth.setAttribute('height', (vis.teeth * (5 + open * 6) + 2 * vis.teeth).toFixed(2));
+  tongue.setAttribute('cx', cx.toFixed(2)); tongue.setAttribute('cy', (up + 6).toFixed(2));
+  tongue.setAttribute('rx', (hw * .45 * vis.tongue).toFixed(2)); tongue.setAttribute('ry', (5 * vis.tongue).toFixed(2));
+}
+
+// ---------- Audio ----------
+function audio() {
+  ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  return ctx;
+}
+function listenTo(node, toSpeakers) {
+  const analyser = audio().createAnalyser();
+  analyser.fftSize = 256;
+  analyser.smoothingTimeConstant = .5;
+  node.connect(analyser);
+  if (toSpeakers) analyser.connect(ctx.destination);
+  return { analyser, nodes: [node, analyser], bins: new Uint8Array(analyser.frequencyBinCount) };
+}
+const cleanTimeline = tl => {
+  if (!Array.isArray(tl)) return null;
+  const steps = tl.filter(s => s && typeof s.time === 'number' && isFinite(s.time) && Object.hasOwn(VIS, s.viseme))
+    .map(s => ({ time: s.time, viseme: s.viseme })).sort((a, b) => a.time - b.time);
+  return steps.length ? steps : null;
+};
+
+// ---------- Public API ----------
+const guard = fn => (...args) => { // never throw into the host page
+  if (!alive) return false;
+  try { return fn(...args); } catch (err) { console.warn('FacePoly:', err.message); return false; }
+};
+const api = {
+  setExpression: guard((name, intensity = 1, duration = 350) => {
+    expr = { name: Object.hasOwn(EXPR, name) ? name : 'neutral', intensity: clamp(num(intensity, 1), 0, 1), duration: clamp(num(duration, 350), 0, 5000) };
+    return expr.name;
+  }),
+  lookAt: guard((x, y) => { // -1..1 on each axis; anything else releases the eyes
+    manualLook = typeof x === 'number' && typeof y === 'number' && isFinite(x) && isFinite(y) ? { x: clamp(x, -1, 1), y: clamp(y, -1, 1) } : null;
+    return true;
+  }),
+  setHeadDirection: guard((yaw, pitch, roll) => {
+    manualTurn = { yaw: clamp(num(yaw, 0), -24, 24), pitch: clamp(num(pitch, 0), -18, 18), roll: clamp(num(roll, 0), -15, 15) };
+    return true;
+  }),
+  blink: guard(() => { blinkStart = clock; return true; }),
+  wink: guard((side = 'right') => { winks[side === 'left' ? 'L' : 'R'] = clock; return true; }),
+  setViseme: guard((name, amount = 1) => {
+    const v = VIS[Object.hasOwn(VIS, name) ? name : 'REST'], a = clamp(num(amount, 1), 0, 1);
+    manualVis = Object.fromEntries(Object.keys(REST).map(k => [k, REST[k] + (v[k] - REST[k]) * a]));
+    return true;
+  }),
+  speakFromAudio: guard((element, timeline = null) => {
+    if (!(element instanceof HTMLMediaElement)) return false;
+    api.stopSpeaking();
+    let source = sources.get(element); // an element can be wired to Web Audio only once
+    if (!source) { source = audio().createMediaElementSource(element); sources.set(element, source); }
+    speech = { ...listenTo(source, true), timeline: cleanTimeline(timeline), time: () => element.currentTime * 1000 };
+    const mine = speech;
+    element.addEventListener('ended', () => { if (speech === mine) api.stopSpeaking(); }, { once: true, signal: listeners.signal });
+    return true;
+  }),
+  connectMicrophone: guard(stream => {
+    if (!(stream instanceof MediaStream) || !stream.getAudioTracks().length) return false;
+    api.stopSpeaking();
+    speech = { ...listenTo(audio().createMediaStreamSource(stream), false), timeline: null, time: () => 0 };
+    return true;
+  }),
+  // For hosts that already measure their own audio: loudness and brightness, both 0..1, called every frame.
+  setSpeechLevel: guard((vol, bright = .5) => {
+    hostLevel = { vol: clamp(num(vol, 0), 0, 1), bright: clamp(num(bright, .5), 0, 1) };
+    hostAt = clock;
+    return true;
+  }),
+  stopSpeaking: guard(() => {
+    if (speech && speech.nodes) for (const n of speech.nodes) { try { n.disconnect(); } catch {} }
+    speech = null; speakingFlag = false; hostLevel = null; manualVis = REST; // the mouth eases back to REST
+    return true;
+  }),
+  setBackground: guard(color => {
+    if (color !== 'transparent' && !(typeof color === 'string' && CSS.supports('color', color))) return false;
+    document.documentElement.style.setProperty('--fp-bg', color);
+    return true;
+  }),
+  setEyeColor: guard(color => {
+    if (!(typeof color === 'string' && CSS.supports('color', color))) return false;
+    document.documentElement.style.setProperty('--fp-eye', color);
+    return true;
+  }),
+  setListening: guard(flag => { listening = !!flag; return true; }),
+  react: guard((o = {}) => {
+    const r = o && typeof o === 'object' ? o : {};
+    api.setExpression(r.emotion, r.intensity);
+    speakingFlag = !!r.speaking;
+    const dir = { center: [0, 0], left: [-.7, 0], right: [.7, 0], up: [0, -.7], down: [0, .7] }[r.lookDirection];
+    if (dir) api.lookAt(dir[0], dir[1]); else api.lookAt(null);
+    return true;
+  }),
+  destroy: () => {
+    if (!alive) return false;
+    api.stopSpeaking();
+    alive = false;
+    cancelAnimationFrame(frame);
+    listeners.abort();
+    if (ctx) ctx.close().catch(() => {});
+    root.replaceChildren();
+    document.getElementById('fp-panel')?.remove();
+    document.getElementById('fp-toggle')?.remove();
+    return true;
+  },
+  expressions: Object.keys(EXPR),
+  visemes: Object.keys(VIS),
+};
+window.FacePoly = api;
+
+// ---------- Pointer, visibility, demo ----------
+on(window, 'pointermove', e => {
+  const r = root.getBoundingClientRect();
+  pointerLook = { x: clamp((e.clientX - r.left - r.width / 2) / r.width, -1, 1) * .8, y: clamp((e.clientY - r.top - r.height * .44) / r.height, -1, 1) * .8 };
+  pointerAt = clock;
+});
+on(document, 'visibilitychange', () => { // stop drawing in a background tab
+  cancelAnimationFrame(frame);
+  if (!document.hidden && alive) { last = 0; frame = requestAnimationFrame(update); }
+});
+
+const panel = document.getElementById('fp-panel'), toggle = document.getElementById('fp-toggle');
+const pickExpr = document.getElementById('fp-expr'), pickInt = document.getElementById('fp-int');
+for (const name of api.expressions) pickExpr.add(new Option(name, name));
+const apply = () => api.setExpression(pickExpr.value, +pickInt.value);
+on(pickExpr, 'change', apply);
+on(pickInt, 'input', apply);
+on(document.getElementById('fp-bg'), 'change', e => api.setBackground(e.target.value));
+on(toggle, 'click', () => { panel.hidden = !panel.hidden; toggle.setAttribute('aria-expanded', String(!panel.hidden)); });
+function demoSpeak() { // no audio file here, so the demo plays a viseme timeline on a clock
+  api.stopSpeaking();
+  const order = ['MBP', 'A', 'L', 'O', 'FV', 'E', 'REST', 'WQ', 'I', 'MBP', 'U', 'A', 'L', 'E', 'O', 'FV', 'I', 'REST', 'A', 'MBP', 'O', 'E'];
+  const start = clock;
+  speech = { timeline: order.map((viseme, i) => ({ time: i * 130, viseme })), time: () => clock - start, end: order.length * 130 };
+  speakingFlag = true;
+}
+on(panel, 'click', e => {
+  const act = e.target.dataset && e.target.dataset.act;
+  if (act === 'blink') api.blink();
+  if (act === 'winkL') api.wink('left');
+  if (act === 'winkR') api.wink('right');
+  if (act === 'speak') demoSpeak();
+  if (act === 'reset') { pickExpr.value = 'neutral'; pickInt.value = 1; api.stopSpeaking(); api.lookAt(null); api.setHeadDirection(0, 0, 0); apply(); }
+  if (act === 'hide') { panel.hidden = true; toggle.hidden = true; }
+});
+if (new URLSearchParams(location.search).get('panel') === '0') toggle.hidden = true;
+
+frame = requestAnimationFrame(update); // idle demo starts on load
+})();
+</script>
+</body>
+</html>
