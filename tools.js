@@ -70,6 +70,50 @@ const S = d => ({ type: 'STRING', description: d });
 const N = d => ({ type: 'NUMBER', description: d });
 const B = d => ({ type: 'BOOLEAN', description: d });
 
+// Loads a URL in the Chrome tab that already shows the same site, so repeated searches do not pile up tabs.
+// Without Chrome the default browser opens it. $1 = url, $2 = site, $3 = the AppleScript below.
+const REUSE_TAB = `on run argv
+  set u to item 1 of argv
+  set site to item 2 of argv
+  tell application "Google Chrome"
+    activate
+    repeat with w in (windows whose mode is "normal")
+      set i to 0
+      repeat with t in tabs of w
+        set i to i + 1
+        if URL of t contains site then
+          set URL of t to u
+          set active tab index of w to i
+          set index of w to 1
+          return "Dimuat dalam tab sedia ada"
+        end if
+      end repeat
+    end repeat
+    if (count of (windows whose mode is "normal")) is 0 then
+      make new window
+      set URL of active tab of front window to u
+    else
+      tell (first window whose mode is "normal") to make new tab with properties {URL:u}
+    end if
+    return "Dibuka dalam tab baharu"
+  end tell
+end run`;
+const browse = (url, site) => ['/bin/zsh', ['-c',
+  'if [ -d "/Applications/Google Chrome.app" ]; then osascript -e "$3" -- "$1" "$2"; else open "$1" && echo "Dibuka dalam browser"; fi', 'jarvis', url, site, REUSE_TAB]];
+
+// A real mouse click at a screen point (needs Accessibility). argv: x, y, clicks.
+const CLICK = `ObjC.import('CoreGraphics');
+function run(argv) {
+  const p = $.CGPointMake(+argv[0], +argv[1]), n = +argv[2];
+  for (let c = 1; c <= n; c++) for (const type of [$.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) {
+    const e = $.CGEventCreateMouseEvent(null, type, p, $.kCGMouseButtonLeft);
+    $.CGEventSetIntegerValueField(e, $.kCGMouseEventClickState, c);
+    $.CGEventPost($.kCGHIDEventTap, e);
+    delay(0.04);
+  }
+  return 'Diklik pada ' + argv[0] + ', ' + argv[1];
+}`;
+
 // name: { d: description, p: params, opt: optional param names, run: args => [file, argv] }
 const T = {
   // Apps and system
@@ -239,11 +283,12 @@ end tell
 end run`, text(a.query, 100)) },
 
   // Browser and web
-  open_url: { d: 'Buka laman web', p: { url: S('URL penuh bermula https://') }, run: a => ['open', [webUrl(a.url)]] },
-  web_search: { d: 'Cari di Google', p: { query: S('Kata carian') },
-    run: a => ['open', ['https://www.google.com/search?q=' + q(text(a.query, 300))]] },
-  youtube: { d: 'Cari video di YouTube', p: { query: S('Kata carian') },
-    run: a => ['open', ['https://www.youtube.com/results?search_query=' + q(text(a.query, 300))]] },
+  open_url: { d: 'Buka laman web. Guna semula tab laman yang sama jika sudah dibuka.', p: { url: S('URL penuh bermula https://') },
+    run: a => { const u = webUrl(a.url); return browse(u, new URL(u).hostname.replace(/^www\./, '')); } },
+  web_search: { d: 'Cari di Google dalam tab Google sedia ada (tidak buka tab baharu jika sudah ada)', p: { query: S('Kata carian') },
+    run: a => browse('https://www.google.com/search?q=' + q(text(a.query, 300)), 'google.com/search') },
+  youtube: { d: 'Cari video atau lagu di YouTube dalam tab YouTube sedia ada. Untuk memainkannya, lepas itu guna see_screen dan mouse_click pada video pertama.', p: { query: S('Kata carian') },
+    run: a => browse('https://www.youtube.com/results?search_query=' + q(text(a.query, 300)), 'youtube.com') },
   maps: { d: 'Cari tempat atau arah dalam Maps', p: { query: S('Nama tempat atau alamat') },
     run: a => ['open', ['maps://?q=' + q(text(a.query, 300))]] },
   browser_tab: { d: 'Tajuk dan URL tab Chrome yang aktif', p: {},
@@ -332,8 +377,14 @@ mdfind -onlyin ~ 'kMDItemFSSize > 500000000' 2>/dev/null | head -20 | while read
 echo "== node_modules projek (boleh dipasang semula dengan npm install) =="
 du -sh ~/Claude/*/node_modules(N) ~/Claude/*/*/node_modules(N) 2>/dev/null | sort -rh | head -10`]] },
   // The page forwards this picture to the model, so Jarvis can read whatever app is on screen.
-  see_screen: { image: true, d: 'Tengok skrin Mac sekarang (tangkapan skrin). Guna untuk semak apa-apa yang dipaparkan oleh mana-mana aplikasi.', p: {},
-    run: () => ['/bin/zsh', ['-c', 'f=$(mktemp -t jarvis).jpg; screencapture -x -t jpg "$f" 2>/dev/null && sips -Z 1600 "$f" >/dev/null 2>&1 && base64 -i "$f"; s=$?; rm -f "$f"; [ $s = 0 ] || echo "Jarvis belum ada kebenaran Screen Recording. Pengguna perlu benarkan node di System Settings > Privacy & Security > Screen & System Audio Recording." >&2; exit $s']] },
+  record_screen: { d: 'Mula rakam video skrin untuk tempoh tertentu; fail .mov disimpan di Desktop. Berhenti sendiri bila tempoh tamat.', p: { seconds: N('Tempoh rakaman dalam saat, 5 hingga 600') },
+    run: a => ['/bin/zsh', ['-c', 'f="$HOME/Desktop/Rakaman Jarvis $(date +%Y-%m-%d\\ %H.%M.%S).mov"; nohup screencapture -v -V "$1" "$f" >/dev/null 2>&1 & echo "Merakam $1 saat. Fail: $f"', 'jarvis', String(int(a.seconds, 5, 600))]] },
+  stop_recording: { d: 'Hentikan rakaman skrin yang sedang berjalan dan simpan failnya', p: {},
+    run: () => ['/bin/zsh', ['-c', 'pkill -INT -x screencapture && echo "Rakaman dihentikan dan disimpan di Desktop" || echo "Tiada rakaman sedang berjalan"']] },
+  mouse_click: { d: 'Klik tetikus pada satu titik di skrin. Panggil see_screen dahulu: koordinat x, y ialah kedudukan piksel dalam imej itu.', p: { x: N('Piksel dari kiri'), y: N('Piksel dari atas'), double: B('true untuk klik dua kali') }, opt: ['double'],
+    run: a => ['osascript', ['-l', 'JavaScript', '-e', CLICK, String(int(a.x, 0, 10000)), String(int(a.y, 0, 10000)), a.double === undefined ? '1' : bool(a.double) ? '2' : '1']] },
+  see_screen: { image: true, d: 'Tengok skrin Mac sekarang (tangkapan skrin). Guna untuk semak apa-apa yang dipaparkan oleh mana-mana aplikasi, dan untuk cari kedudukan sebelum mouse_click.', p: {},
+    run: () => ['/bin/zsh', ['-c', 'f=$(mktemp -t jarvis).jpg; w=$(osascript -l JavaScript -e \'ObjC.import("AppKit"); $.NSScreen.mainScreen.frame.size.width\'); screencapture -x -t jpg "$f" 2>/dev/null && sips --resampleWidth "${w:-1600}" "$f" >/dev/null 2>&1 && base64 -i "$f"; s=$?; rm -f "$f"; [ $s = 0 ] || echo "Jarvis belum ada kebenaran Screen Recording. Pengguna perlu benarkan node di System Settings > Privacy & Security > Screen & System Audio Recording." >&2; exit $s']] },
 
   // Full-power tools. confirm: the page asks the user on screen before the server will run them.
   mail_send: { confirm: true, d: 'Hantar email baharu terus melalui app Mail', p: { to: S('Alamat email penerima'), subject: S('Tajuk'), body: S('Isi') },
@@ -407,7 +458,7 @@ const GROUPS = {
   files:     ['Fail dan storan', ['open_folder', 'find_files', 'open_file', 'trash_file', 'storage_scan', 'disk_space']],
   apps:      ['Buka dan tutup aplikasi', ['open_app', 'quit_app', 'list_apps', 'open_any']],
   system:    ['Sistem (bunyi, Wi-Fi, tidur, restart)', ['set_volume', 'mute', 'dark_mode', 'wifi', 'battery', 'now', 'system_stats', 'sleep_display', 'sleep_mac', 'restart', 'shutdown']],
-  screen:    ['Skrin dan papan kekunci', ['screenshot', 'see_screen', 'type_text', 'press_key']],
+  screen:    ['Skrin dan papan kekunci', ['screenshot', 'see_screen', 'type_text', 'press_key', 'record_screen', 'stop_recording', 'mouse_click']],
   projects:  ['Status projek', ['projects_status']],
   scripts:   ['Skrip bebas (shell dan AppleScript)', ['run_shell', 'applescript']],
 };

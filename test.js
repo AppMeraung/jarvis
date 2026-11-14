@@ -29,6 +29,7 @@ const SAMPLES = {
   outlook_draft: { to: 'ali@example.com', subject: 'Hai & salam', body: 'Apa khabar?' },
   applescript: { script: 'tell application "Finder" to activate' },
   system_stats: {},
+  record_screen: { seconds: 30 }, stop_recording: {}, mouse_click: { x: 100, y: 200 },
 };
 
 test('every tool has a sample and builds a command of plain strings', () => {
@@ -47,7 +48,9 @@ test('every AppleScript compiles', () => {
   for (const [name, args] of Object.entries(cases)) {
     const tool = name.startsWith('key_') ? 'press_key' : name === 'reminder_no_due' ? 'reminder_add' : name;
     const [file, argv] = plan(tool, args);
-    if (file === 'osascript') execFileSync('osacompile', ['-o', out, '-e', argv[1]], { stdio: 'pipe' });
+    if (file === 'osascript' && argv[0] === '-l') execFileSync('osacompile', ['-l', 'JavaScript', '-o', out, '-e', argv[3]], { stdio: 'pipe' });
+    else if (file === 'osascript') execFileSync('osacompile', ['-o', out, '-e', argv[1]], { stdio: 'pipe' });
+    for (const a of argv) if (a.startsWith('on run argv')) execFileSync('osacompile', ['-o', out, '-e', a], { stdio: 'pipe' });   // scripts handed to zsh
   }
 });
 const KEY_NAMES = Object.fromEntries(
@@ -75,14 +78,14 @@ test('app names that could break a command are rejected', () => {
 });
 
 test('open_url allows http and https only', () => {
-  assert.deepStrictEqual(plan('open_url', SAMPLES.open_url), ['open', ['https://example.com/a']]);
+  assert.deepStrictEqual(plan('open_url', SAMPLES.open_url)[1].slice(3, 5), ['https://example.com/a', 'example.com']);
   for (const url of ['file:///etc/passwd', 'javascript:alert(1)', '-a Calculator', 'not a url', undefined]) {
     assert.throws(() => plan('open_url', { url }));
   }
 });
 
 test('searches encode the query', () => {
-  assert.deepStrictEqual(plan('web_search', SAMPLES.web_search), ['open', ['https://www.google.com/search?q=nasi%20lemak%20%26%20teh']]);
+  assert.strictEqual(plan('web_search', SAMPLES.web_search)[1][3], 'https://www.google.com/search?q=nasi%20lemak%20%26%20teh');
   assert.strictEqual(plan('play_song', { query: 'a b' })[1][3], 'spotify:search:a%20b');
   assert.throws(() => plan('web_search', { query: '  ' }));
 });
@@ -211,4 +214,26 @@ test('saving an API key replaces only the key line and rejects anything that is 
   for (const bad of ['', 'short', key + '\nMODEL=evil', key + ' x', 'a'.repeat(200), 42, undefined, null]) {
     assert.throws(() => envWithKey('', bad));
   }
+});
+
+test('web tools reuse the tab of the same site instead of opening a new one', () => {
+  const [file, argv] = plan('youtube', { query: 'Siti Nurhaliza' });
+  assert.strictEqual(file, '/bin/zsh');
+  assert.deepStrictEqual(argv.slice(3, 5), ['https://www.youtube.com/results?search_query=Siti%20Nurhaliza', 'youtube.com']);
+  assert.ok(argv[5].includes('set URL of t to u') && !argv[5].includes('Siti'));   // the query travels as an argument only
+  assert.ok(!argv[1].includes('Siti'));
+  assert.strictEqual(plan('web_search', { query: 'gym' })[1][4], 'google.com/search');
+});
+
+test('screen recording length and mouse position are validated and passed as arguments', () => {
+  const rec = plan('record_screen', { seconds: 30 })[1];
+  assert.strictEqual(rec.at(-1), '30');
+  assert.ok(!rec[1].includes('30'));
+  for (const seconds of [0, 4, 601, 1.5, '30; rm -rf ~', undefined]) assert.throws(() => plan('record_screen', { seconds }));
+  const click = plan('mouse_click', { x: 100, y: 200, double: true })[1];
+  assert.deepStrictEqual(click.slice(-3), ['100', '200', '2']);
+  assert.strictEqual(plan('mouse_click', { x: 1, y: 2 })[1].at(-1), '1');
+  for (const x of [-1, 20000, 1.5, 'abc', undefined]) assert.throws(() => plan('mouse_click', { x, y: 5 }));
+  assert.throws(() => plan('mouse_click', { x: 5, y: 5, double: 'yes' }));
+  for (const name of ['record_screen', 'stop_recording', 'mouse_click']) assert.ok(groups.find(g => g.id === 'screen').tools.includes(name), name);
 });
