@@ -91,6 +91,8 @@ const REUSE_TAB = `on run argv
     end repeat
     if (count of (windows whose mode is "normal")) is 0 then
       make new window
+      -- Chrome started by a script with several profiles can refuse to open a window; say so instead of pretending
+      if (count of windows) is 0 then error "Chrome tidak dapat membuka tetingkap. Minta pengguna buka Chrome dahulu."
       set URL of active tab of front window to u
     else
       tell (first window whose mode is "normal") to make new tab with properties {URL:u}
@@ -98,11 +100,20 @@ const REUSE_TAB = `on run argv
     return "Dibuka dalam tab baharu"
   end tell
 end run`;
-const browse = (url, site) => ['/bin/zsh', ['-c',
-  'if [ -d "/Applications/Google Chrome.app" ]; then osascript -e "$3" -- "$1" "$2"; else open "$1" && echo "Dibuka dalam browser"; fi', 'jarvis', url, site, REUSE_TAB]];
+// play: look up the first real video of a YouTube search (sponsored slots are not "videoRenderer") and open it, so it starts
+// by itself. shortcut: reads YouTube's page markup, falls back to the search page when that changes.
+const browse = (url, site, play = '') => ['/bin/zsh', ['-c', `u="$1"
+if [ -n "$4" ]; then
+  id=$(curl -fsL -m 8 -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36" "$1" | grep -o '"videoRenderer":{"videoId":"[A-Za-z0-9_-]\\{11\\}"' | head -1 | cut -d'"' -f6)
+  if [ -n "$id" ]; then u="https://www.youtube.com/watch?v=$id"; echo "Video pertama sedang dimainkan."; else echo "Video tidak dapat dipilih secara automatik; halaman carian dibuka."; fi
+fi
+# A closed Chrome is started the normal way: started by AppleScript it can come up with no window at all.
+if [ ! -d "/Applications/Google Chrome.app" ]; then open "$u" && echo "Dibuka dalam browser"
+elif pgrep -xq "Google Chrome"; then osascript -e "$3" -- "$u" "$2"
+else open -a "Google Chrome" "$u" && echo "Chrome dibuka dengan halaman itu"; fi`, 'jarvis', url, site, REUSE_TAB, play]];
 
 // A real mouse click at a screen point (needs Accessibility). argv: x, y, clicks.
-const CLICK = `ObjC.import('CoreGraphics');
+const CLICK = `ObjC.import('CoreGraphics'); ObjC.import('AppKit');
 function run(argv) {
   const p = $.CGPointMake(+argv[0], +argv[1]), n = +argv[2];
   for (let c = 1; c <= n; c++) for (const type of [$.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) {
@@ -111,7 +122,8 @@ function run(argv) {
     $.CGEventPost($.kCGHIDEventTap, e);
     delay(0.04);
   }
-  return 'Diklik pada ' + argv[0] + ', ' + argv[1];
+  // Naming the app in front lets the model notice when it clicked the wrong window.
+  return 'Diklik pada ' + argv[0] + ', ' + argv[1] + '. Aplikasi di depan: ' + $.NSWorkspace.sharedWorkspace.frontmostApplication.localizedName.js;
 }`;
 
 // name: { d: description, p: params, opt: optional param names, run: args => [file, argv] }
@@ -287,9 +299,8 @@ end run`, text(a.query, 100)) },
     run: a => { const u = webUrl(a.url); return browse(u, new URL(u).hostname.replace(/^www\./, '')); } },
   web_search: { d: 'Cari di Google dalam tab Google sedia ada (tidak buka tab baharu jika sudah ada)', p: { query: S('Kata carian') },
     run: a => browse('https://www.google.com/search?q=' + q(text(a.query, 300)), 'google.com/search') },
-  youtube: { d: 'Cari video atau lagu di YouTube dalam tab YouTube sedia ada. Untuk memainkannya, lepas itu guna see_screen dan mouse_click pada video pertama.', p: { query: S('Kata carian') },
-    run: a => browse('https://www.youtube.com/results?search_query=' + q(text(a.query, 300)), 'youtube.com') },
-  maps: { d: 'Cari tempat atau arah dalam Maps', p: { query: S('Nama tempat atau alamat') },
+  youtube: { d: 'Cari video atau lagu di YouTube dalam tab YouTube sedia ada. play=true terus memainkan video pertama (guna bila pengguna minta main, pasang atau buka lagu/video); tanpa play, hanya senarai carian dipaparkan.', p: { query: S('Kata carian'), play: B('true untuk terus main video pertama') }, opt: ['play'],
+    run: a => browse('https://www.youtube.com/results?search_query=' + q(text(a.query, 300)), 'youtube.com', a.play !== undefined && bool(a.play) ? '1' : '') },  maps: { d: 'Cari tempat atau arah dalam Maps', p: { query: S('Nama tempat atau alamat') },
     run: a => ['open', ['maps://?q=' + q(text(a.query, 300))]] },
   browser_tab: { d: 'Tajuk dan URL tab Chrome yang aktif', p: {},
     run: () => osa('tell application "Google Chrome" to (title of active tab of front window) & " | " & (URL of active tab of front window)') },

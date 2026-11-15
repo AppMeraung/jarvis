@@ -225,6 +225,14 @@ test('web tools reuse the tab of the same site instead of opening a new one', ()
   assert.strictEqual(plan('web_search', { query: 'gym' })[1][4], 'google.com/search');
 });
 
+test('youtube plays the first video only when asked, and the lookup is valid shell', () => {
+  assert.strictEqual(plan('youtube', { query: 'a' })[1][6], '');
+  assert.strictEqual(plan('youtube', { query: 'a', play: true })[1][6], '1');
+  assert.strictEqual(plan('youtube', { query: 'a', play: false })[1][6], '');
+  assert.throws(() => plan('youtube', { query: 'a', play: 'ya' }));
+  require('node:child_process').execFileSync('/bin/zsh', ['-n', '-c', plan('youtube', { query: 'a' })[1][1]]);
+});
+
 test('screen recording length and mouse position are validated and passed as arguments', () => {
   const rec = plan('record_screen', { seconds: 30 })[1];
   assert.strictEqual(rec.at(-1), '30');
