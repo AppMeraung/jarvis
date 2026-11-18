@@ -5,6 +5,7 @@ import WebKit
 
 final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMessageHandler {
   var panel: NSPanel!
+  var web: WKWebView!
 
   func applicationDidFinishLaunching(_ note: Notification) {
     let size = NSSize(width: 230, height: 400)
@@ -23,7 +24,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
     config.userContentController.add(self, name: "drag")
     config.userContentController.add(self, name: "quit")
     config.userContentController.add(self, name: "size")
-    let web = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: config)
+    web = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: config)
     web.setValue(false, forKey: "drawsBackground") // lets the desktop show through
     web.uiDelegate = self
     web.load(URLRequest(url: URL(string: "http://localhost:4199/?mini=1")!))
@@ -39,7 +40,8 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
     if message.name == "size", let scale = message.body as? Double, scale >= 0.5, scale <= 2 {
       let old = panel.frame, size = NSSize(width: 230 * scale, height: 400 * scale)
       panel.setFrame(NSRect(x: old.maxX - size.width, y: old.minY, width: size.width, height: size.height), display: true)
-      panel.contentView?.frame = NSRect(origin: .zero, size: size)
+      web.frame = NSRect(origin: .zero, size: size)
+      web.pageZoom = CGFloat(scale)   // the whole page scales with the window, like browser zoom
     }
   }
 

@@ -141,7 +141,9 @@
   .mini .panel::before, .mini .panel::after { display: none; }
   .mini #core { padding: 0; min-height: 0; flex: none; }
   .mini #head { width: 214px; height: 257px; max-height: none; aspect-ratio: auto; cursor: grab; }
-  .mini #power + button, .mini #quit, .mini .miniOnly { padding: 6px 10px; }
+  .mini #core > span { display: flex; gap: 4px; flex-wrap: nowrap; justify-content: center; align-items: center; }
+  .mini #power { padding: 5px 14px; font-size: 10px; letter-spacing: .15em; }
+  .mini #quit, .mini .miniOnly { width: 26px; height: 26px; padding: 0; font-size: 11px; line-height: 1; }
   .mini button { border-radius: 999px; padding: 6px 14px; font-size: 11px; background: #03101ae6; }
   .mini aside { min-height: 0; flex: none; width: 210px; }
   .mini #log { padding: 0; overflow: hidden; }
@@ -358,6 +360,7 @@ const RULES = `Guna alat yang diberi untuk mengawal Mac: aplikasi, volume, muzik
 - YouTube: bila Tuan minta main atau buka lagu atau video, guna youtube dengan play=true; ia terus dimainkan, tidak perlu klik.
 - Jangan sekali-kali kata sesuatu sudah dibuat kalau alat tidak mengesahkannya. Sebelum mouse_click, pastikan sasaran memang kelihatan dalam imej see_screen terbaru; jangan teka koordinat. Selepas klik, kalau aplikasi di depan bukan yang dijangka, beritahu Tuan.
 - Bila Tuan kata "bye Jarvis" atau "ok stop Jarvis", jawab dengan satu ayat selamat tinggal yang pendek sahaja; sesi akan ditutup sendiri. Tuan boleh panggil semula dengan "Hai Jarvis".
+- Pakar dalam semua bidang: jawab seperti pakar terbaik dalam bidang itu (sains, perubatan am, undang-undang am, kewangan, teknologi, agama, bahasa, sejarah, kejuruteraan). Fikir langkah demi langkah sebelum menjawab, beri sebab dan contoh, dan semak sendiri jawapan anda. Semak fakta dengan search_web dan read_web, kira dengan calculate, dan jangan sekali-kali meneka nombor, tarikh atau nama. Jika tidak pasti, kata dengan jujur dan cari dahulu.
 - Pencerita: bila Tuan minta cerita, ceritakan dongeng, hikayat, legenda dan cerita rakyat Melayu (Sang Kancil, Bawang Putih Bawang Merah, Hang Tuah, Puteri Gunung Ledang, Si Tanggang, Mat Jenin, Pak Pandir, Batu Belah Batu Bertangkup dan banyak lagi) serta cerita dari seluruh dunia. Bercerita dengan penuh perasaan: suara watak, saspens, dan tukar emosi wajah ikut babak (set_expression). Cerita panjang dipecah kepada bahagian; di hujung setiap bahagian tanya sama ada Tuan mahu sambung. Akhiri dengan pengajaran cerita. Jika Tuan minta cerita yang anda tidak pasti, cari dengan search_web, kemudian guna read_web untuk membaca teks asal (contohnya dari ms.wikisource.org untuk hikayat lama) dan ceritakan semula.
 - Teka-teki: boleh beri teka-teki, pantun teka-teki, kuiz dan permainan tekaan. Beri satu soalan, tunggu jawapan Tuan, beri petunjuk jika salah, dan simpan markah sepanjang permainan.
 - Cikgu: terangkan sejarah dunia, sejarah Malaysia dan alam Melayu (Kesultanan Melayu Melaka, penjajahan, kemerdekaan, pembentukan Malaysia), sains, geografi dan pengetahuan am Malaysia serta global dengan jelas, ikut tahap Tuan (sekolah rendah, SPM, universiti). Untuk fakta terkini, tarikh, angka dan nama, semak dengan search_web (dan read_web jika perlu) dahulu dan jangan reka.
@@ -397,7 +400,6 @@ function applySettings() {
   $('hFace').textContent = ch?.name || { facepoly: 'FacePoly 2D', net: tr('Jaringan') }[S.face] || 'Robot 3D';
   if (MINI) {   // Jarvis Mini: the window is resized by the app, the page is scaled to match
     const scale = MINI_SIZES[S.mini] || 1;
-    document.body.style.zoom = scale;
     $('miniSize').textContent = { s: 'S', m: 'M', l: 'L' }[S.mini] || 'M';
     window.webkit?.messageHandlers.size?.postMessage(scale);
   }

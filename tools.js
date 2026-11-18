@@ -511,7 +511,7 @@ const groups = Object.entries(GROUPS).map(([id, [label, tools]]) => ({ id, label
 // off = ids of the groups the user switched off. Unknown ids are dropped, so a bad file cannot switch anything else off.
 const cleanOff = off => (Array.isArray(off) ? off : []).filter(id => Object.hasOwn(GROUPS, id));
 // Screen settings shared by the Chrome tab and Jarvis Mini: only these keys, short text or yes/no.
-const SETTING_TYPES = { lang: 'string', voice: 'string', style: 'string', call: 'string', face: 'string', theme: 'string', brief: 'boolean', wake: 'boolean' };
+const SETTING_TYPES = { lang: 'string', voice: 'string', style: 'string', call: 'string', face: 'string', theme: 'string', mini: 'string', brief: 'boolean', wake: 'boolean' };
 const cleanSettings = s => Object.fromEntries(Object.entries(SETTING_TYPES)
   .filter(([k, type]) => s && typeof s[k] === type && String(s[k]).length <= 40)
   .map(([k]) => [k, s[k]]));

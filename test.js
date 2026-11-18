@@ -292,7 +292,7 @@ test('only the first window that hears the wake words may start', async () => {
 
 test('shared settings keep only known keys with short text or yes/no values', () => {
   const { cleanSettings } = require('./tools');
-  assert.deepStrictEqual(cleanSettings({ lang: 'en', wake: false, brief: true, call: 'Boss' }), { lang: 'en', wake: false, brief: true, call: 'Boss' });
+  assert.deepStrictEqual(cleanSettings({ lang: 'en', wake: false, brief: true, call: 'Boss', mini: 'l' }), { lang: 'en', wake: false, brief: true, call: 'Boss', mini: 'l' });
   assert.deepStrictEqual(cleanSettings({ lang: 'x'.repeat(41), evil: 'y', theme: { a: 1 }, wake: 'ya' }), {});
   for (const bad of [null, undefined, 'teks', 42, []]) assert.deepStrictEqual(cleanSettings(bad), {});
 });
