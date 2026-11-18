@@ -26,6 +26,8 @@ function off() {
   try { return cleanOff(JSON.parse(fs.readFileSync(file('permissions.json'), 'utf8')).off); } catch { return []; }
 }
 
+const pages = new Set();
+
 const json = (res, code, body) => {
   res.writeHead(code, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -50,6 +52,24 @@ http.createServer((req, res) => {
       groups: groups.map(g => ({ id: g.id, label: g.label, count: g.tools.length, on: !off().includes(g.id),
         tools: g.tools.map(name => declarations.find(d => d.name === name).description) })),
     });
+  }
+  // Every open Jarvis page listens here; when one starts a session the others are told to stop theirs.
+  if (req.method === 'GET' && route === '/events') {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+    res.write(':\n\n');
+    pages.add(res);
+    req.on('close', () => pages.delete(res));
+    return;
+  }
+  if (req.method === 'POST' && route === '/claim') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 100) req.destroy(); });
+    req.on('end', () => {
+      const id = body.replace(/[^a-z0-9]/g, '');
+      for (const page of pages) page.write(`data: ${id}\n\n`);
+      json(res, 200, { result: 'ok' });
+    });
+    return;
   }
   if (req.method === 'POST' && route === '/key') {
     let body = '';

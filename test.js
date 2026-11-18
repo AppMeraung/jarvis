@@ -245,3 +245,25 @@ test('screen recording length and mouse position are validated and passed as arg
   assert.throws(() => plan('mouse_click', { x: 5, y: 5, double: 'yes' }));
   for (const name of ['record_screen', 'stop_recording', 'mouse_click']) assert.ok(groups.find(g => g.id === 'screen').tools.includes(name), name);
 });
+
+test('starting a session in one window tells every other Jarvis window to stop', async () => {
+  const http = require('node:http');
+  const PORT = 4300 + Math.floor(Math.random() * 500);
+  const server = require('node:child_process').spawn(process.execPath, ['server.js'], { cwd: __dirname, env: { ...process.env, PORT } });
+  try {
+    await new Promise(done => server.stdout.once('data', done));
+    const heard = new Promise((done, fail) => {
+      http.get({ host: 'localhost', port: PORT, path: '/events' }, res => {
+        let text = '';
+        res.on('data', c => { text += c; if (text.includes('data:')) { res.destroy(); done(text); } });
+      }).on('error', fail);
+    });
+    await new Promise(done => setTimeout(done, 200));   // let the listener connect first
+    const post = (body, headers = {}) => fetch(`http://localhost:${PORT}/claim`, { method: 'POST', body, headers }).then(r => r.status);
+    assert.strictEqual(await post('abc123 <script>'), 200);
+    assert.match(await heard, /data: abc123script\n/);   // only letters and digits are passed on
+    assert.strictEqual(await post('x', { origin: 'https://evil.example' }), 403);
+  } finally {
+    server.kill();
+  }
+});
