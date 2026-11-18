@@ -17,7 +17,7 @@ const SAMPLES = {
   calendar_events: { days: 3 }, calendar_add: { title: 'Mesyuarat', start: '2026-11-20T15:30', minutes: 60 },
   reminder_add: { title: 'Beli susu', due: '2026-11-20T09:00' }, reminders_list: {},
   note_add: { title: 'Idea', body: 'Isi' }, notes_search: { query: 'Idea' },
-  open_url: { url: 'https://example.com/a' }, read_web: { url: 'https://ms.wikisource.org/wiki/Hikayat_Hang_Tuah' }, search_web: { query: 'hikayat sang kancil' }, calculate: { expression: '(2+3)^2' }, web_search: { query: 'nasi lemak & teh' },
+  open_url: { url: 'https://example.com/a' }, read_web: { url: 'https://ms.wikisource.org/wiki/Hikayat_Hang_Tuah' }, search_web: { query: 'hikayat sang kancil' }, news: { query: 'Malaysia' }, weather: { city: 'Kuala Lumpur' }, exchange_rate: { from: 'USD', to: 'MYR' }, calculate: { expression: '(2+3)^2' }, web_search: { query: 'nasi lemak & teh' },
   youtube: { query: 'lagu raya' }, maps: { query: 'KLCC' }, browser_tab: {}, close_tab: {},
   open_folder: { name: 'Downloads' }, find_files: { query: 'laporan' },
   open_file: { path: path.join(HOME, 'Documents', 'laporan.pdf') },
@@ -361,4 +361,15 @@ test('calculate works out maths exactly and refuses anything that is not maths',
   assert.strictEqual(run('7 × 8 ÷ 2'), '28');
   assert.match(run('sqrt(-1)'), /Tiada jawapan nyata/);
   for (const bad of ['process.exit()', 'require("fs")', 'constructor', '1;alert(1)', 'x=1', '`a`', 'M']) assert.throws(() => plan('calculate', { expression: bad }), bad);
+});
+
+test('live world tools pass what the user said only as arguments, and check currency codes', () => {
+  for (const [name, args, said] of [['news', { query: 'banjir; rm -rf ~' }, 'banjir; rm -rf ~'], ['weather', { city: 'Kota $(Bharu)' }, null]]) {
+    const argv = plan(name, args)[1];
+    assert.ok(!argv[1].includes('rm -rf') && !argv[1].includes('Bharu'), name);
+    if (said) assert.ok(argv.includes(said), name);
+  }
+  assert.ok(plan('weather', { city: 'Kota $(Bharu)' })[1].includes('Kota%20%24(Bharu)'));
+  assert.deepStrictEqual(plan('exchange_rate', { from: 'usd', to: 'myr, sgd', amount: 50 })[1].slice(-2), ['MYR,SGD', '50']);
+  for (const bad of [{ from: 'US', to: 'MYR' }, { from: 'USD', to: 'MYR;ls' }, { from: '$(x)', to: 'MYR' }]) assert.throws(() => plan('exchange_rate', bad));
 });

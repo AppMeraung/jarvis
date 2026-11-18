@@ -124,6 +124,27 @@ const SEARCH = `(async () => {
   console.log(found.flat().join('\\n\\n') || 'Tiada hasil.');
 })()`;
 
+// Live world information from free services that need no key. curl fetches; Node turns the reply into short text.
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+const NEWS = `(async () => {
+  let x = '';
+  for await (const c of process.stdin) x += c;
+  const tag = (s, t) => (s.match(new RegExp('<' + t + '[^>]*>([\\\\s\\\\S]*?)</' + t + '>')) || [])[1] || '';
+  const plain = s => s.replace(/<!\\\\[CDATA\\\\[|\\\\]\\\\]>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+  const items = x.split('<item>').slice(1, 11).map(i => plain(tag(i, 'title')) + ' (' + new Date(tag(i, 'pubDate')).toLocaleDateString('ms-MY') + ')');
+  console.log(items.join('\\n') || 'Tiada berita dijumpai.');
+})()`;
+const RATES = `(async () => {
+  let x = '';
+  for await (const c of process.stdin) x += c;
+  const j = JSON.parse(x), want = process.argv[1].split(',');
+  if (j.result !== 'success') throw new Error('kadar tidak dapat dibaca');
+  const amount = +process.argv[2];
+  console.log(want.filter(c => j.rates[c]).map(c => amount + ' ' + j.base_code + ' = ' + +(amount * j.rates[c]).toFixed(4) + ' ' + c).join('\\n')
+    + '\\nKemas kini: ' + j.time_last_update_utc + '. Kadar oleh ExchangeRate-API.');
+})()`;
+const currency = v => /^[A-Za-z]{3}$/.test(v) ? v.toUpperCase() : bad('kod mata wang tiga huruf, cth. MYR, USD, SGD');
+
 // Exact arithmetic for maths questions. Only numbers, operators, brackets and known maths words get through.
 const CALC_WORDS = ['sqrt', 'cbrt', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'log', 'ln', 'log10', 'log2', 'exp', 'abs', 'pi', 'e', 'floor', 'ceil', 'round', 'deg', 'rad'];
 function mathExpr(v) {
@@ -323,6 +344,15 @@ end run`, text(a.query, 100)) },
   // Browser and web
   search_web: { d: 'Cari tanpa membuka browser dalam Wikipedia Melayu, Wikipedia Inggeris dan Wikisource Melayu (hikayat dan teks lama): dapat tajuk, alamat dan ringkasan. Guna untuk sejarah, sains, pengetahuan am dan mencari cerita; kemudian guna read_web untuk membaca halaman. Untuk berita terkini guna web_search.', p: { query: S('Kata carian') },
     run: a => [process.execPath, ['-e', SEARCH, text(a.query, 300)]] },
+  news: { d: 'Berita terkini dari Google News: 10 tajuk terbaru dengan tarikh. Guna untuk apa-apa yang berlaku sekarang di Malaysia atau dunia (politik, ekonomi, sukan, teknologi, bencana).', p: { query: S('Topik, cth. "Malaysia", "ekonomi dunia", "Harimau Malaya"'), lang: S('ms (Melayu) atau en (English)') }, opt: ['lang'],
+    run: a => { const en = a.lang === 'en';
+      return ['/bin/zsh', ['-c', 'curl -sLG -m 15 -A "$4" --data-urlencode "q=$1" --data-urlencode "hl=$2" --data-urlencode "gl=MY" --data-urlencode "ceid=$3" https://news.google.com/rss/search | "$5" -e "$6"',
+        'jarvis', text(a.query, 200), en ? 'en-MY' : 'ms', en ? 'MY:en' : 'MY:ms', UA, process.execPath, NEWS]]; } },
+  weather: { d: 'Cuaca semasa di mana-mana bandar di dunia: keadaan, suhu, terasa seperti, angin, lembapan dan hujan.', p: { city: S('Nama bandar, cth. "Kuala Lumpur", "Tokyo"') },
+    run: a => ['/bin/zsh', ['-c', 'curl -sG -m 15 --data-urlencode "format=%l: %C %t (terasa %f), angin %w, lembapan %h, hujan %p" --data-urlencode "lang=id" "https://wttr.in/$1"', 'jarvis', encodeURIComponent(text(a.city, 80))]] },
+  exchange_rate: { d: 'Kadar tukaran mata wang terkini (dikemas kini setiap hari).', p: { from: S('Kod mata wang asal, cth. USD'), to: S('Satu atau lebih kod dipisah koma, cth. MYR,SGD'), amount: N('Jumlah, lalai 1') }, opt: ['amount'],
+    run: a => ['/bin/zsh', ['-c', 'curl -s -m 15 "https://open.er-api.com/v6/latest/$1" | "$2" -e "$3" "$4" "$5"', 'jarvis', currency(a.from), process.execPath, RATES,
+      text(a.to, 60).split(',').map(c => currency(c.trim())).join(','), String(a.amount === undefined ? 1 : int(a.amount, 0, 1e12))]] },
   calculate: { d: 'Kira dengan tepat (matematik, Matematik Tambahan, peratus, wang). Sudut trigonometri dalam radian; guna rad(30) untuk darjah. log = log10, ln = log asli.', p: { expression: S('cth. (2*3+sqrt(16))^2/7, sin(rad(30)), ln(5)') },
     run: a => [process.execPath, ['-e', CALC, mathExpr(a.expression)]] },
   read_web: { d: 'Baca teks sesuatu laman web (cerita, hikayat, artikel, nota pelajaran) tanpa membukanya di skrin. Guna untuk membaca cerita atau fakta dari laman yang dijumpai melalui carian.', p: { url: S('URL penuh bermula https://') },
@@ -498,7 +528,7 @@ const GROUPS = {
   notes:     ['Nota', ['note_add', 'notes_search']],
   contacts:  ['Kenalan', ['contacts_search']],
   photos:    ['Foto', ['photos_search']],
-  web:       ['Browser, carian web dan kalkulator', ['calculate', 'search_web', 'read_web', 'open_url', 'web_search', 'youtube', 'maps', 'browser_tab', 'close_tab']],
+  web:       ['Browser, carian web dan kalkulator', ['news', 'weather', 'exchange_rate', 'calculate', 'search_web', 'read_web', 'open_url', 'web_search', 'youtube', 'maps', 'browser_tab', 'close_tab']],
   files:     ['Fail dan storan', ['open_folder', 'find_files', 'open_file', 'trash_file', 'storage_scan', 'disk_space']],
   apps:      ['Buka dan tutup aplikasi', ['open_app', 'quit_app', 'list_apps', 'open_any']],
   system:    ['Sistem (bunyi, Wi-Fi, tidur, restart)', ['set_volume', 'mute', 'dark_mode', 'wifi', 'battery', 'now', 'system_stats', 'sleep_display', 'sleep_mac', 'restart', 'shutdown']],
