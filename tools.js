@@ -187,6 +187,30 @@ const CODE_SEARCH = `(async () => {
   console.log(out.join('\\n\\n') || 'Tiada hasil.');
 })()`;
 
+// Memory, kept on this Mac only: facts.json (what Jarvis was asked to remember) and history.jsonl (every conversation).
+const memoryDir = () => process.env.JARVIS_MEMORY || path.join(__dirname, 'memory');
+const REMEMBER = `const fs = require('fs'), dir = process.argv[1], f = dir + '/facts.json', fact = process.argv[2].trim();
+fs.mkdirSync(dir, { recursive: true });
+let facts = []; try { facts = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+if (facts.some(x => x.text.toLowerCase() === fact.toLowerCase())) { console.log('Sudah diingat.'); process.exit(); }
+facts.push({ text: fact, at: new Date().toISOString() });
+fs.writeFileSync(f, JSON.stringify(facts.slice(-500), null, 1));
+console.log('Diingat: ' + fact);`;
+const FORGET = `const fs = require('fs'), f = process.argv[1] + '/facts.json', what = process.argv[2].toLowerCase();
+let facts = []; try { facts = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+const keep = facts.filter(x => !x.text.toLowerCase().includes(what)), gone = facts.length - keep.length;
+if (gone) fs.writeFileSync(f, JSON.stringify(keep, null, 1));
+console.log(gone ? gone + ' perkara dilupakan.' : 'Tiada perkara yang sepadan.');`;
+// Past conversations: lines that share the most words with the question, with their date, newest first on a tie.
+const RECALL = `const fs = require('fs'), words = process.argv[2].toLowerCase().split(/\\\\W+/u).filter(w => w.length > 2);
+let lines = []; try { lines = fs.readFileSync(process.argv[1] + '/history.jsonl', 'utf8').trim().split('\\n').map(l => JSON.parse(l)); } catch {}
+const hits = lines.map((l, i) => ({ l, i, n: words.filter(w => l.text.toLowerCase().includes(w)).length })).filter(h => h.n)
+  .sort((a, b) => b.n - a.n || b.i - a.i).slice(0, 15).sort((a, b) => a.i - b.i);
+console.log(hits.map(h => new Date(h.l.at).toLocaleString('ms-MY') + ' ' + h.l.who + ': ' + h.l.text.slice(0, 400)).join('\\n') || 'Tiada perbualan lama yang sepadan.');`;
+
+// A second brain for hard questions: Claude Code answers in an empty folder, with web search, and cannot touch files.
+const ASK_CLAUDE = 'd=$(mktemp -d); cd "$d"; for c in "$HOME/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do [ -x "$c" ] && { "$c" -p "$1" --allowedTools "WebSearch,WebFetch" --disallowedTools "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit" --output-format text; r=$?; rm -rf "$d"; exit $r; }; done; rm -rf "$d"; echo "Claude Code tidak dipasang di Mac ini, jadi otak kedua tidak tersedia."';
+
 // Exact arithmetic for maths questions. Only numbers, operators, brackets and known maths words get through.
 const CALC_WORDS = ['sqrt', 'cbrt', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'log', 'ln', 'log10', 'log2', 'exp', 'abs', 'pi', 'e', 'floor', 'ceil', 'round', 'deg', 'rad'];
 function mathExpr(v) {
@@ -412,6 +436,14 @@ end run`, text(a.query, 100)) },
   code_agent: { confirm: true, long: true, d: 'Serahkan kerja kod kepada Claude Code (jurutera AI) dalam satu folder projek: membaiki pepijat, menambah ciri, menyusun semula atau menerangkan kod. Ia boleh membaca dan MENGUBAH fail dalam folder itu (tidak menjalankan arahan shell). Pengguna perlu meluluskan. Boleh ambil masa beberapa minit.', p: { folder: S('Laluan penuh folder projek'), task: S('Tugasan yang jelas dan lengkap, cth. "Betulkan ralat TypeError di halaman log masuk dan terangkan apa yang diubah"') },
     run: a => ['/bin/zsh', ['-c', 'for c in "$HOME/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do [ -x "$c" ] && cd "$1" && exec "$c" -p "$2" --permission-mode acceptEdits --allowedTools "Read,Edit,Write,Grep,Glob" --output-format text; done; echo "Claude Code tidak dipasang di Mac ini (https://claude.com/claude-code)."',
       'jarvis', codePath(a.folder, true), text(a.task, 4000)]] },
+  remember: { d: 'Ingat satu fakta penting tentang pengguna untuk selamanya (nama, keluarga, kerja, kesukaan, matlamat, janji, maklumat yang pengguna minta diingat). Fakta ini dibaca semula pada setiap sesi baharu.', p: { fact: S('Satu ayat yang jelas, cth. "Anak sulung Tuan bernama Aisyah, umur 7 tahun"') },
+    run: a => [process.execPath, ['-e', REMEMBER, memoryDir(), text(a.fact, 500)]] },
+  recall: { d: 'Cari dalam semua perbualan lama dengan pengguna (sejak hari pertama). Guna bila pengguna merujuk perkara lalu, cth. "semalam kita bincang apa", "nombor yang saya bagi dulu".', p: { query: S('Kata kunci perkara yang dicari') },
+    run: a => [process.execPath, ['-e', RECALL, memoryDir(), text(a.query, 300)]] },
+  forget: { confirm: true, d: 'Lupakan fakta yang diingat yang mengandungi perkataan ini. Perlu kelulusan pengguna.', p: { what: S('Perkataan dalam fakta yang hendak dilupakan') },
+    run: a => [process.execPath, ['-e', FORGET, memoryDir(), text(a.what, 200)]] },
+  ask_claude: { long: true, d: 'Otak kedua: tanya Claude (AI Anthropic, dengan carian web) untuk soalan yang sukar atau panjang: penaakulan rumit, matematik tinggi, analisis, penulisan panjang, reka bentuk sistem, perancangan. Ambil masa beberapa saat hingga seminit. Tidak boleh membaca atau mengubah fail.', p: { question: S('Soalan lengkap dengan semua konteks yang perlu, dan bahasa jawapan') },
+    run: a => ['/bin/zsh', ['-c', ASK_CLAUDE, 'jarvis', text(a.question, 8000)]] },
   calculate: { d: 'Kira dengan tepat (matematik, Matematik Tambahan, peratus, wang). Sudut trigonometri dalam radian; guna rad(30) untuk darjah. log = log10, ln = log asli.', p: { expression: S('cth. (2*3+sqrt(16))^2/7, sin(rad(30)), ln(5)') },
     run: a => [process.execPath, ['-e', CALC, mathExpr(a.expression)]] },
   read_web: { d: 'Baca teks sesuatu laman web (cerita, hikayat, artikel, nota pelajaran) tanpa membukanya di skrin. Guna untuk membaca cerita atau fakta dari laman yang dijumpai melalui carian.', p: { url: S('URL penuh bermula https://') },
@@ -595,6 +627,7 @@ const GROUPS = {
   system:    ['Sistem (bunyi, Wi-Fi, tidur, restart)', ['set_volume', 'mute', 'dark_mode', 'wifi', 'battery', 'now', 'system_stats', 'sleep_display', 'sleep_mac', 'restart', 'shutdown']],
   screen:    ['Skrin dan papan kekunci', ['screenshot', 'see_screen', 'type_text', 'press_key', 'record_screen', 'stop_recording', 'mouse_click']],
   projects:  ['Status projek', ['projects_status']],
+  memory:    ['Ingatan dan otak kedua (Claude)', ['remember', 'recall', 'forget', 'ask_claude']],
   code:      ['Kod dan pengaturcaraan', ['read_code', 'check_code', 'code_search', 'code_agent']],
   scripts:   ['Skrip bebas (shell dan AppleScript)', ['run_shell', 'applescript']],
 };
@@ -603,7 +636,7 @@ const groups = Object.entries(GROUPS).map(([id, [label, tools]]) => ({ id, label
 // off = ids of the groups the user switched off. Unknown ids are dropped, so a bad file cannot switch anything else off.
 const cleanOff = off => (Array.isArray(off) ? off : []).filter(id => Object.hasOwn(GROUPS, id));
 // Screen settings shared by the Chrome tab and Jarvis Mini: only these keys, short text or yes/no.
-const SETTING_TYPES = { lang: 'string', voice: 'string', style: 'string', call: 'string', face: 'string', theme: 'string', mini: 'string', brief: 'boolean', wake: 'boolean' };
+const SETTING_TYPES = { lang: 'string', voice: 'string', style: 'string', call: 'string', face: 'string', theme: 'string', mini: 'string', brief: 'boolean', wake: 'boolean', memory: 'boolean' };
 const cleanSettings = s => Object.fromEntries(Object.entries(SETTING_TYPES)
   .filter(([k, type]) => s && typeof s[k] === type && String(s[k]).length <= 40)
   .map(([k]) => [k, s[k]]));
@@ -631,4 +664,4 @@ function envWithKey(text, key) {
   return /^GEMINI_API_KEY=.*$/m.test(text) ? text.replace(/^GEMINI_API_KEY=.*$/m, line) : text + (text && !text.endsWith('\n') ? '\n' : '') + line + '\n';
 }
 
-module.exports = { envWithKey, plan, declarations, confirm, image, slow, long, isLocal, HOME, groups, cleanOff, blocked, cleanSettings, cleanCharacter };
+module.exports = { envWithKey, plan, declarations, confirm, image, slow, long, isLocal, HOME, groups, cleanOff, blocked, cleanSettings, cleanCharacter, memoryDir };

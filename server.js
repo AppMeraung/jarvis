@@ -2,7 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { plan, declarations, confirm, image, slow, long, isLocal, HOME, groups, cleanOff, blocked, envWithKey, cleanSettings, cleanCharacter } = require('./tools');
+const { plan, declarations, confirm, image, slow, long, isLocal, HOME, groups, cleanOff, blocked, envWithKey, cleanSettings, cleanCharacter, memoryDir } = require('./tools');
 
 const PORT = +process.env.PORT || 4199;
 const file = f => path.join(__dirname, f);
@@ -124,6 +124,30 @@ http.createServer((req, res) => {
         delete now.id;
         fs.writeFileSync(path.join(dir, 'character.json'), JSON.stringify({ ...now, ...cleanCharacter(JSON.parse(body)) }));
         tellPages();
+        json(res, 200, { result: 'ok' });
+      } catch (err) {
+        json(res, 400, { error: err.message });
+      }
+    });
+    return;
+  }
+  // Memory for a new session: everything Jarvis was asked to remember, and the end of the last conversations.
+  if (req.method === 'GET' && route === '/memory') {
+    const read = (f, parse) => { try { return parse(fs.readFileSync(path.join(memoryDir(), f), 'utf8')); } catch { return []; } };
+    return json(res, 200, {
+      facts: read('facts.json', JSON.parse).slice(-300).map(f => f.text),
+      recent: read('history.jsonl', t => t.trim().split('\n').map(l => JSON.parse(l))).slice(-40),
+    });
+  }
+  if (req.method === 'POST' && route === '/history') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 20000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const { who, text } = JSON.parse(body);
+        if (!['ANDA', 'JARVIS'].includes(who) || typeof text !== 'string' || !text.trim() || text.length > 10000) throw new Error('baris tidak sah');
+        fs.mkdirSync(memoryDir(), { recursive: true });
+        fs.appendFileSync(path.join(memoryDir(), 'history.jsonl'), JSON.stringify({ at: new Date().toISOString(), who, text: text.trim() }) + '\n');
         json(res, 200, { result: 'ok' });
       } catch (err) {
         json(res, 400, { error: err.message });

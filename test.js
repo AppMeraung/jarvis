@@ -15,6 +15,7 @@ const SAMPLES = {
   mail_inbox: {}, projects_status: {}, mail_read: { id: 12 }, mail_draft_reply: { id: 12, body: 'Terima kasih' },
   mail_draft: { to: 'ali@example.com', subject: 'Hai', body: 'Apa khabar' },
   whatsapp_message: { phone: '012-345 6789', text: 'Ok, jumpa esok' },
+  remember: { fact: 'Tuan suka kopi tanpa gula' }, recall: { query: 'kopi' }, forget: { what: 'kopi' }, ask_claude: { question: 'Apa itu entropi?' },
   read_code: { path: __filename }, check_code: { path: __filename }, code_search: { query: 'node fetch timeout' }, code_agent: { folder: __dirname, task: 'Terangkan fail tools.js' }, flights: { from: 'KUL', to: 'Tokyo', date: '2026-12-10', back: '2026-12-17' },
   calendar_events: { days: 3 }, calendar_add: { title: 'Mesyuarat', start: '2026-11-20T15:30', minutes: 60 },
   reminder_add: { title: 'Beli susu', due: '2026-11-20T09:00' }, reminders_list: {},
@@ -126,7 +127,7 @@ test('type_text turns line breaks into Return', () => {
 
 test('dangerous tools are flagged for on-screen confirmation, ordinary ones are not', () => {
   assert.deepStrictEqual([...confirm].sort(),
-    ['applescript', 'code_agent', 'mail_send', 'mail_send_reply', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
+    ['applescript', 'code_agent', 'forget', 'mail_send', 'mail_send_reply', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
   assert.ok(!confirm.includes('open_app'));
 });
 
@@ -400,4 +401,46 @@ test('code tools read and check real files, refuse secrets and folders outside h
   assert.throws(() => plan('code_agent', { folder: __filename, task: 'x' }));   // must be a folder
   assert.ok(confirm.includes('code_agent') && !confirm.includes('read_code'));
   assert.ok(plan('code_agent', { folder: __dirname, task: 'a; rm -rf ~' })[1].includes('a; rm -rf ~'));   // the task is an argument, not shell text
+});
+
+test('memory: facts are remembered once, found again in old conversations, and forgotten on request', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-mem-'));
+  process.env.JARVIS_MEMORY = dir;
+  const run = (name, args) => { const [file, argv] = plan(name, args); return execFileSync(file, argv, { encoding: 'utf8' }).trim(); };
+  try {
+    assert.match(run('remember', { fact: 'Anak Tuan bernama Aisyah' }), /Diingat/);
+    assert.match(run('remember', { fact: 'anak tuan bernama aisyah' }), /Sudah diingat/);
+    fs.writeFileSync(path.join(dir, 'history.jsonl'), [
+      { at: '2026-11-01T10:00:00Z', who: 'ANDA', text: 'Nombor plat kereta saya WXY 1234' },
+      { at: '2026-11-02T10:00:00Z', who: 'JARVIS', text: 'Cuaca hari ini cerah' }].map(l => JSON.stringify(l)).join('\n') + '\n');
+    assert.match(run('recall', { query: 'plat kereta' }), /ANDA: Nombor plat kereta saya WXY 1234/);
+    assert.match(run('recall', { query: 'gajah' }), /Tiada perbualan lama/);
+    assert.match(run('forget', { what: 'aisyah' }), /1 perkara dilupakan/);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'facts.json'), 'utf8')), []);
+    assert.ok(confirm.includes('forget') && !confirm.includes('remember'));
+    assert.ok(plan('ask_claude', { question: 'a; rm -rf ~' })[1].includes('a; rm -rf ~'));   // the question is an argument
+  } finally {
+    delete process.env.JARVIS_MEMORY;
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
+test('the server keeps only real conversation lines and hands memory to a new session', async () => {
+  const PORT = 4300 + Math.floor(Math.random() * 500);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-'));
+  for (const f of ['server.js', 'tools.js']) fs.copyFileSync(path.join(__dirname, f), path.join(dir, f));
+  const server = require('node:child_process').spawn(process.execPath, ['server.js'], { cwd: dir, env: { ...process.env, PORT, JARVIS_MEMORY: path.join(dir, 'mem') } });
+  const url = p => `http://localhost:${PORT}${p}`;
+  try {
+    await new Promise(done => server.stdout.once('data', done));
+    assert.deepStrictEqual(await fetch(url('/memory')).then(r => r.json()), { facts: [], recent: [] });
+    assert.strictEqual((await fetch(url('/history'), { method: 'POST', body: JSON.stringify({ who: 'ANDA', text: 'Hai Jarvis' }) })).status, 200);
+    assert.strictEqual((await fetch(url('/history'), { method: 'POST', body: JSON.stringify({ who: 'SISTEM', text: 'x' }) })).status, 400);
+    assert.strictEqual((await fetch(url('/history'), { method: 'POST', body: JSON.stringify({ who: 'ANDA', text: '' }) })).status, 400);
+    const mem = await fetch(url('/memory')).then(r => r.json());
+    assert.deepStrictEqual(mem.recent.map(l => [l.who, l.text]), [['ANDA', 'Hai Jarvis']]);
+  } finally {
+    server.kill();
+    fs.rmSync(dir, { recursive: true });
+  }
 });
