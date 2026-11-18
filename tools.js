@@ -2,6 +2,7 @@
 // AppleScript never has model text spliced into it: values travel as argv ("on run argv").
 const os = require('node:os');
 const path = require('node:path');
+const fs = require('node:fs');
 
 const HOME = os.homedir();
 const APP = /^[\p{L}\p{N}][\p{L}\p{N} .+&-]{0,59}$/u;
@@ -152,6 +153,39 @@ const RATES = `(async () => {
     + '\\nKemas kini: ' + j.time_last_update_utc + '. Kadar oleh ExchangeRate-API.');
 })()`;
 const currency = v => /^[A-Za-z]{3}$/.test(v) ? v.toUpperCase() : bad('kod mata wang tiga huruf, cth. MYR, USD, SGD');
+
+// Code: a path inside the user's folder, never a secrets file (its contents would be sent to Gemini).
+function codePath(v, dir = false) {
+  const p = path.resolve(text(v, 1000).replace(/^~(?=\/|$)/, HOME));
+  if (!p.startsWith(HOME + path.sep)) bad('mesti dalam folder pengguna');
+  if (/(^|\/)(\.env[^/]*|id_rsa[^/]*|id_ed25519[^/]*|[^/]*\.(pem|key|p12|keystore|jks)|credentials[^/]*|secrets?[^/]*)$/i.test(p)) bad('fail rahsia (kunci, kata laluan) tidak dibaca');
+  let st;
+  try { st = fs.statSync(p); } catch { bad('tidak dijumpai: ' + p); }
+  if (dir ? !st.isDirectory() : !st.isFile()) bad(dir ? 'bukan folder' : 'bukan fail');
+  return p;
+}
+const READ_CODE = `const t = require('fs').readFileSync(process.argv[1]);
+if (t.length > 2e6 || t.includes(0)) { console.log('Fail terlalu besar atau bukan teks.'); process.exit(); }
+const lines = t.toString('utf8').split('\\n'), from = Math.max(1, +process.argv[2] || 1), to = Math.min(lines.length, +process.argv[3] || from + 299);
+console.log(lines.length + ' baris. Baris ' + from + ' hingga ' + to + ':\\n' + lines.slice(from - 1, to).map((l, i) => (from + i) + '  ' + l).join('\\n'));`;
+const CHECK_CODE = `const { spawnSync } = require('child_process'), f = process.argv[1], ext = require('path').extname(f).toLowerCase();
+const py = 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])';
+const how = { '.js': [process.execPath, ['--check', f]], '.mjs': [process.execPath, ['--check', f]], '.cjs': [process.execPath, ['--check', f]],
+  '.py': ['/usr/bin/python3', ['-c', py, f]], '.swift': ['/usr/bin/swiftc', ['-parse', f]], '.rb': ['/usr/bin/ruby', ['-c', f]],
+  '.sh': ['/bin/bash', ['-n', f]], '.bash': ['/bin/bash', ['-n', f]], '.zsh': ['/bin/zsh', ['-n', f]] }[ext];
+if (ext === '.json') { try { JSON.parse(require('fs').readFileSync(f, 'utf8')); console.log('Tiada ralat: JSON sah.'); } catch (e) { console.log('Ralat JSON: ' + e.message); } process.exit(); }
+if (!how) { console.log('Semakan sintaks untuk ' + (ext || 'fail ini') + ' belum disokong. Baca dengan read_code dan semak sendiri, atau guna code_agent.'); process.exit(); }
+const r = spawnSync(how[0], how[1], { encoding: 'utf8', timeout: 60000 });
+console.log(r.status === 0 ? 'Tiada ralat sintaks.' : ('Ralat:\\n' + (r.stderr || r.stdout)).slice(0, 4000));`;
+const CODE_SEARCH = `(async () => {
+  const q = encodeURIComponent(process.argv[1]), get = u => fetch(u, { headers: { 'user-agent': 'JarvisMac/1.0' }, signal: AbortSignal.timeout(15000) }).then(r => r.json()).catch(() => ({}));
+  const [so, mdn] = await Promise.all([get('https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&site=stackoverflow&pagesize=6&q=' + q),
+    get('https://developer.mozilla.org/api/v1/search?locale=en-US&q=' + q)]);
+  const plain = s => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  const out = (so.items || []).map(i => 'Stack Overflow: ' + plain(i.title) + ' (' + i.score + ' undi' + (i.is_answered ? ', ada jawapan' : '') + ')\\n' + i.link)
+    .concat((mdn.documents || []).slice(0, 4).map(d => 'MDN: ' + d.title + '\\nhttps://developer.mozilla.org' + d.mdn_url + '\\n' + d.summary));
+  console.log(out.join('\\n\\n') || 'Tiada hasil.');
+})()`;
 
 // Exact arithmetic for maths questions. Only numbers, operators, brackets and known maths words get through.
 const CALC_WORDS = ['sqrt', 'cbrt', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'log', 'ln', 'log10', 'log2', 'exp', 'abs', 'pi', 'e', 'floor', 'ceil', 'round', 'deg', 'rad'];
@@ -369,6 +403,15 @@ end run`, text(a.query, 100)) },
         + (a.people !== undefined ? ` for ${int(a.people, 1, 9)} passengers` : '');
       return browse('https://www.google.com/travel/flights?q=' + encodeURIComponent(q), 'google.com/travel');
     } },
+  read_code: { d: 'Baca fail kod atau teks dalam projek pengguna, dengan nombor baris (300 baris setiap kali). Fail rahsia seperti .env tidak dibaca.', p: { path: S('Laluan penuh fail'), from: N('Baris mula, lalai 1'), to: N('Baris akhir') }, opt: ['from', 'to'],
+    run: a => [process.execPath, ['-e', READ_CODE, codePath(a.path), String(a.from === undefined ? 1 : int(a.from, 1, 1e7)), String(a.to === undefined ? '' : int(a.to, 1, 1e7))]] },
+  check_code: { d: 'Semak ralat sintaks satu fail kod (JavaScript, Python, Swift, Ruby, shell, JSON). Hanya membaca.', p: { path: S('Laluan penuh fail') },
+    run: a => [process.execPath, ['-e', CHECK_CODE, codePath(a.path)]] },
+  code_search: { d: 'Cari penyelesaian pengaturcaraan di Stack Overflow dan dokumentasi MDN: tajuk, undi dan pautan. Kemudian guna read_web untuk membaca jawapan atau dokumentasi.', p: { query: S('Soalan atau mesej ralat dalam English, cth. "node fetch timeout"') },
+    run: a => [process.execPath, ['-e', CODE_SEARCH, text(a.query, 300)]] },
+  code_agent: { confirm: true, long: true, d: 'Serahkan kerja kod kepada Claude Code (jurutera AI) dalam satu folder projek: membaiki pepijat, menambah ciri, menyusun semula atau menerangkan kod. Ia boleh membaca dan MENGUBAH fail dalam folder itu (tidak menjalankan arahan shell). Pengguna perlu meluluskan. Boleh ambil masa beberapa minit.', p: { folder: S('Laluan penuh folder projek'), task: S('Tugasan yang jelas dan lengkap, cth. "Betulkan ralat TypeError di halaman log masuk dan terangkan apa yang diubah"') },
+    run: a => ['/bin/zsh', ['-c', 'for c in "$HOME/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do [ -x "$c" ] && cd "$1" && exec "$c" -p "$2" --permission-mode acceptEdits --allowedTools "Read,Edit,Write,Grep,Glob" --output-format text; done; echo "Claude Code tidak dipasang di Mac ini (https://claude.com/claude-code)."',
+      'jarvis', codePath(a.folder, true), text(a.task, 4000)]] },
   calculate: { d: 'Kira dengan tepat (matematik, Matematik Tambahan, peratus, wang). Sudut trigonometri dalam radian; guna rad(30) untuk darjah. log = log10, ln = log asli.', p: { expression: S('cth. (2*3+sqrt(16))^2/7, sin(rad(30)), ln(5)') },
     run: a => [process.execPath, ['-e', CALC, mathExpr(a.expression)]] },
   read_web: { d: 'Baca teks sesuatu laman web (cerita, hikayat, artikel, nota pelajaran) tanpa membukanya di skrin. Guna untuk membaca cerita atau fakta dari laman yang dijumpai melalui carian.', p: { url: S('URL penuh bermula https://') },
@@ -515,6 +558,7 @@ end run`, int(a.id, 1, 2147483647), text(a.body, 5000)) },
 const confirm = Object.keys(T).filter(name => T[name].confirm);
 const image = Object.keys(T).filter(name => T[name].image);
 const slow = Object.keys(T).filter(name => T[name].slow);
+const long = Object.keys(T).filter(name => T[name].long);
 
 function plan(name, a) {
   if (!Object.hasOwn(T, name)) bad('alat tidak dikenali: ' + name);
@@ -551,6 +595,7 @@ const GROUPS = {
   system:    ['Sistem (bunyi, Wi-Fi, tidur, restart)', ['set_volume', 'mute', 'dark_mode', 'wifi', 'battery', 'now', 'system_stats', 'sleep_display', 'sleep_mac', 'restart', 'shutdown']],
   screen:    ['Skrin dan papan kekunci', ['screenshot', 'see_screen', 'type_text', 'press_key', 'record_screen', 'stop_recording', 'mouse_click']],
   projects:  ['Status projek', ['projects_status']],
+  code:      ['Kod dan pengaturcaraan', ['read_code', 'check_code', 'code_search', 'code_agent']],
   scripts:   ['Skrip bebas (shell dan AppleScript)', ['run_shell', 'applescript']],
 };
 const groups = Object.entries(GROUPS).map(([id, [label, tools]]) => ({ id, label, tools }));
@@ -586,4 +631,4 @@ function envWithKey(text, key) {
   return /^GEMINI_API_KEY=.*$/m.test(text) ? text.replace(/^GEMINI_API_KEY=.*$/m, line) : text + (text && !text.endsWith('\n') ? '\n' : '') + line + '\n';
 }
 
-module.exports = { envWithKey, plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, cleanSettings, cleanCharacter };
+module.exports = { envWithKey, plan, declarations, confirm, image, slow, long, isLocal, HOME, groups, cleanOff, blocked, cleanSettings, cleanCharacter };

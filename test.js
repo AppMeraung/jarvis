@@ -14,7 +14,8 @@ const SAMPLES = {
   media: { app: 'Spotify', action: 'next' }, now_playing: { app: 'Music' }, play_song: { query: 'Sudirman' },
   mail_inbox: {}, projects_status: {}, mail_read: { id: 12 }, mail_draft_reply: { id: 12, body: 'Terima kasih' },
   mail_draft: { to: 'ali@example.com', subject: 'Hai', body: 'Apa khabar' },
-  whatsapp_message: { phone: '012-345 6789', text: 'Ok, jumpa esok' }, flights: { from: 'KUL', to: 'Tokyo', date: '2026-12-10', back: '2026-12-17' },
+  whatsapp_message: { phone: '012-345 6789', text: 'Ok, jumpa esok' },
+  read_code: { path: __filename }, check_code: { path: __filename }, code_search: { query: 'node fetch timeout' }, code_agent: { folder: __dirname, task: 'Terangkan fail tools.js' }, flights: { from: 'KUL', to: 'Tokyo', date: '2026-12-10', back: '2026-12-17' },
   calendar_events: { days: 3 }, calendar_add: { title: 'Mesyuarat', start: '2026-11-20T15:30', minutes: 60 },
   reminder_add: { title: 'Beli susu', due: '2026-11-20T09:00' }, reminders_list: {},
   note_add: { title: 'Idea', body: 'Isi' }, notes_search: { query: 'Idea' },
@@ -125,7 +126,7 @@ test('type_text turns line breaks into Return', () => {
 
 test('dangerous tools are flagged for on-screen confirmation, ordinary ones are not', () => {
   assert.deepStrictEqual([...confirm].sort(),
-    ['applescript', 'mail_send', 'mail_send_reply', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
+    ['applescript', 'code_agent', 'mail_send', 'mail_send_reply', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
   assert.ok(!confirm.includes('open_app'));
 });
 
@@ -383,4 +384,20 @@ test('WhatsApp opens a typed reply without sending it, and flights only search',
   assert.ok(argv.includes('https://www.google.com/travel/flights?q=' + encodeURIComponent('Flights from KUL to Tokyo on 2026-12-10 one way for 2 passengers')));
   assert.throws(() => plan('flights', { from: 'KUL', to: 'Tokyo', date: '10/12/2026' }));
   assert.ok(!confirm.includes('whatsapp_message'));   // it never sends, so no approval needed
+});
+
+test('code tools read and check real files, refuse secrets and folders outside home, and editing needs approval', () => {
+  const run = (name, args) => { const [file, argv] = plan(name, args); return execFileSync(file, argv, { encoding: 'utf8' }); };
+  assert.match(run('read_code', { path: __filename, from: 1, to: 2 }), /baris\. Baris 1 hingga 2:\n1  const test/);
+  const good = path.join(__dirname, '.check-ok.js'), broken = path.join(__dirname, '.check-bad.js'), json = path.join(__dirname, '.check.json');
+  fs.writeFileSync(good, 'const a = 1;\n'); fs.writeFileSync(broken, 'const a = ;\n'); fs.writeFileSync(json, '{"a": }');
+  try {
+    assert.match(run('check_code', { path: good }), /Tiada ralat sintaks/);
+    assert.match(run('check_code', { path: broken }), /Ralat:[\s\S]*SyntaxError/);
+    assert.match(run('check_code', { path: json }), /Ralat JSON/);
+  } finally { for (const f of [good, broken, json]) fs.rmSync(f); }
+  for (const bad of ['/etc/passwd', path.join(__dirname, '.env'), path.join(HOME, '.ssh', 'id_rsa'), path.join(__dirname, 'tiada.js')]) assert.throws(() => plan('read_code', { path: bad }), bad);
+  assert.throws(() => plan('code_agent', { folder: __filename, task: 'x' }));   // must be a folder
+  assert.ok(confirm.includes('code_agent') && !confirm.includes('read_code'));
+  assert.ok(plan('code_agent', { folder: __dirname, task: 'a; rm -rf ~' })[1].includes('a; rm -rf ~'));   // the task is an argument, not shell text
 });

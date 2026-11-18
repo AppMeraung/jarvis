@@ -2,7 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, envWithKey, cleanSettings, cleanCharacter } = require('./tools');
+const { plan, declarations, confirm, image, slow, long, isLocal, HOME, groups, cleanOff, blocked, envWithKey, cleanSettings, cleanCharacter } = require('./tools');
 
 const PORT = +process.env.PORT || 4199;
 const file = f => path.join(__dirname, f);
@@ -198,7 +198,7 @@ http.createServer((req, res) => {
       } catch (err) {
         return json(res, 400, { error: err.message });
       }
-      execFile(cmd[0], cmd[1], { timeout: slow.includes(name) ? 120000 : 30000, maxBuffer: 16e6, cwd: HOME }, (err, out, stderr) =>
+      execFile(cmd[0], cmd[1], { timeout: long.includes(name) ? 900000 : slow.includes(name) ? 120000 : 30000, maxBuffer: 16e6, cwd: HOME }, (err, out, stderr) =>
         json(res, 200, err ? { error: err.killed
             ? 'Masa tamat. macOS mungkin sedang menunggu pengguna tekan Allow pada tetingkap kebenaran.'
             : (stderr.trim() || 'arahan gagal, kod ' + err.code).slice(0, 500) }
