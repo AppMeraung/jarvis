@@ -267,3 +267,55 @@ test('starting a session in one window tells every other Jarvis window to stop',
     server.kill();
   }
 });
+
+test('"Hai Jarvis" wakes Jarvis and "Bye Jarvis" sends it away, other speech does neither', () => {
+  const page = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const { WAKE, BYE } = new Function(page.match(/const NAME = .*\n.*\n.*\n/)[0] + 'return { WAKE, BYE };')();
+  for (const s of ['hai jarvis', 'Hello Jarvis', 'hi, Jarvis buka youtube', 'hey jervis', 'Helo Javis.']) assert.match(s, WAKE, s);
+  for (const s of ['jarvis', 'hai', 'saya nak tengok chai jarvis', 'mahai jarvisa', 'bye jarvis']) assert.doesNotMatch(s, WAKE, s);
+  for (const s of ['bye bye jarvis', 'Bye Jarvis', 'ok stop Jarvis', 'okay stop jarvis', 'stop, Jarvis.', 'bai bai jarvis']) assert.match(s, BYE, s);
+  for (const s of ['stop lagu ni', 'hai jarvis', 'jarvis stop muzik', 'bye bye semua']) assert.doesNotMatch(s, BYE, s);
+});
+
+test('only the first window that hears the wake words may start', async () => {
+  const PORT = 4300 + Math.floor(Math.random() * 500);
+  const server = require('node:child_process').spawn(process.execPath, ['server.js'], { cwd: __dirname, env: { ...process.env, PORT } });
+  try {
+    await new Promise(done => server.stdout.once('data', done));
+    const wake = () => fetch(`http://localhost:${PORT}/wake`, { method: 'POST' }).then(r => r.json());
+    assert.deepStrictEqual(await wake(), { go: true });
+    assert.deepStrictEqual(await wake(), { go: false });
+  } finally {
+    server.kill();
+  }
+});
+
+test('shared settings keep only known keys with short text or yes/no values', () => {
+  const { cleanSettings } = require('./tools');
+  assert.deepStrictEqual(cleanSettings({ lang: 'en', wake: false, brief: true, call: 'Boss' }), { lang: 'en', wake: false, brief: true, call: 'Boss' });
+  assert.deepStrictEqual(cleanSettings({ lang: 'x'.repeat(41), evil: 'y', theme: { a: 1 }, wake: 'ya' }), {});
+  for (const bad of [null, undefined, 'teks', 42, []]) assert.deepStrictEqual(cleanSettings(bad), {});
+});
+
+test('a settings save in one window reaches every other window', async () => {
+  const http = require('node:http');
+  const PORT = 4300 + Math.floor(Math.random() * 500);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-'));
+  for (const f of ['server.js', 'tools.js']) fs.copyFileSync(path.join(__dirname, f), path.join(dir, f));
+  const server = require('node:child_process').spawn(process.execPath, ['server.js'], { cwd: dir, env: { ...process.env, PORT } });
+  try {
+    await new Promise(done => server.stdout.once('data', done));
+    const url = `http://localhost:${PORT}/settings`;
+    assert.deepStrictEqual(await fetch(url).then(r => r.json()), {});
+    const heard = new Promise(done => http.get({ host: 'localhost', port: PORT, path: '/events' }, res =>
+      res.on('data', c => { if (String(c).includes('event: settings')) { res.destroy(); done(); } })));
+    await new Promise(done => setTimeout(done, 200));
+    assert.strictEqual((await fetch(url, { method: 'POST', body: JSON.stringify({ lang: 'id', wake: false, x: 1 }) })).status, 200);
+    await heard;
+    assert.deepStrictEqual(await fetch(url).then(r => r.json()), { lang: 'id', wake: false });
+    assert.strictEqual((await fetch(url, { method: 'POST', body: 'bukan json' })).status, 400);
+  } finally {
+    server.kill();
+    fs.rmSync(dir, { recursive: true });
+  }
+});

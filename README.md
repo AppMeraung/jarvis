@@ -31,6 +31,8 @@ Jarvis terbuka sendiri. Kemudian:
 - **Pengesahan di skrin** sebelum hantar emel, padam fail, jalankan skrip, restart atau shutdown.
 - **Bahasa**: Jarvis bercakap Melayu, English, Indonesia, Mandarin, Tamil atau Arab. Paparan dalam Melayu, English atau Indonesia.
 - **Jarvis Mini**: kepala kecil yang terapung di tepi skrin. Buka dari folder Applications anda selepas pemasangan.
+- **Tanpa tangan**: sebut **"Hai Jarvis"** untuk mula, **"Bye Jarvis"** atau **"Ok stop Jarvis"** untuk henti. Boleh dimatikan di Tetapan. Semasa menunggu, pengecaman suara pelayar (Google dalam Chrome, Apple dalam Jarvis Mini) mendengar mikrofon.
+- **Tetapan dikongsi**: Chrome dan Jarvis Mini guna tetapan yang sama dan dikemas kini serentak.
 - **Taklimat harian**: jadual minggu ini, peringatan dan kerja tertangguh setiap kali anda tekan MULA.
 
 ## Kebenaran macOS
@@ -52,7 +54,7 @@ zsh ~/Library/Application\ Support/Jarvis/uninstall.command
 
 ## English
 
-Paste the install line above into **Terminal**. When Jarvis opens, press **TETAPAN** (Settings), choose **English** under language, paste your own Gemini API key, press **SAVE**, then **START**. You need macOS 13+, Node.js 20+ and your own Gemini API key. Risky actions (sending email, deleting files, scripts, restart) always ask for confirmation on screen, and each group of abilities can be switched off in Settings.
+Paste the install line above into **Terminal**. When Jarvis opens, press **TETAPAN** (Settings), choose **English** under language, paste your own Gemini API key, press **SAVE**, then **START**. You need macOS 13+, Node.js 20+ and your own Gemini API key. Say "Hi Jarvis" to start and "Bye Jarvis" to stop. Risky actions (sending email, deleting files, scripts, restart) always ask for confirmation on screen, and each group of abilities can be switched off in Settings.
 
 ## Untuk pembangun
 

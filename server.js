@@ -2,7 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, envWithKey } = require('./tools');
+const { plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, envWithKey, cleanSettings } = require('./tools');
 
 const PORT = +process.env.PORT || 4199;
 const file = f => path.join(__dirname, f);
@@ -27,6 +27,7 @@ function off() {
 }
 
 const pages = new Set();
+let wokeAt = 0;
 
 const json = (res, code, body) => {
   res.writeHead(code, { 'content-type': 'application/json' });
@@ -70,6 +71,30 @@ http.createServer((req, res) => {
       json(res, 200, { result: 'ok' });
     });
     return;
+  }
+  if (req.method === 'GET' && route === '/settings') {
+    let saved = {};
+    try { saved = cleanSettings(JSON.parse(fs.readFileSync(file('settings.json'), 'utf8'))); } catch {}
+    return json(res, 200, saved);
+  }
+  if (req.method === 'POST' && route === '/settings') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 2000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        fs.writeFileSync(file('settings.json'), JSON.stringify(cleanSettings(JSON.parse(body))));
+        for (const page of pages) page.write('event: settings\ndata: 1\n\n');   // every other window reloads them
+        json(res, 200, { result: 'ok' });
+      } catch (err) {
+        json(res, 400, { error: err.message });
+      }
+    });
+    return;
+  }
+  if (req.method === 'POST' && route === '/wake') {   // only the first window that heard "Hai Jarvis" may start
+    const go = Date.now() - wokeAt > 3000;
+    if (go) wokeAt = Date.now();
+    return json(res, 200, { go });
   }
   if (req.method === 'POST' && route === '/key') {
     let body = '';

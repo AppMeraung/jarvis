@@ -23,6 +23,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>LSUIElement</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Jarvis mendengar arahan suara anda.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Jarvis menunggu anda sebut "Hai Jarvis".</string>
   <key>NSAppTransportSecurity</key>
   <dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
