@@ -26,6 +26,14 @@ function webUrl(v) {
   return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : bad('hanya http/https dibenarkan');
 }
 
+// A phone number for WhatsApp: digits only with the country code; a Malaysian 01x number becomes 601x.
+function phone(v) {
+  const d = String(v ?? '').replace(/[\s\-()+]/g, '');
+  if (!/^\d{8,15}$/.test(d)) bad('nombor telefon tidak sah, cth. 0123456789 atau 60123456789');
+  return d.startsWith('0') ? '6' + d : d;
+}
+const isoDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : bad('tarikh mesti YYYY-MM-DD');
+
 const osa = (script, ...args) => ['osascript', ['-e', script, '--', ...args.map(String)]];
 const q = s => encodeURIComponent(s);
 
@@ -353,6 +361,14 @@ end run`, text(a.query, 100)) },
   exchange_rate: { d: 'Kadar tukaran mata wang terkini (dikemas kini setiap hari).', p: { from: S('Kod mata wang asal, cth. USD'), to: S('Satu atau lebih kod dipisah koma, cth. MYR,SGD'), amount: N('Jumlah, lalai 1') }, opt: ['amount'],
     run: a => ['/bin/zsh', ['-c', 'curl -s -m 15 "https://open.er-api.com/v6/latest/$1" | "$2" -e "$3" "$4" "$5"', 'jarvis', currency(a.from), process.execPath, RATES,
       text(a.to, 60).split(',').map(c => currency(c.trim())).join(','), String(a.amount === undefined ? 1 : int(a.amount, 0, 1e12))]] },
+  whatsapp_message: { d: 'Buka perbualan WhatsApp dengan seseorang dan taip mesej ke dalam kotak mesej. TIDAK dihantar: pengguna semak dan tekan Enter sendiri. Cari nombor dengan contacts_search dahulu jika pengguna sebut nama.', p: { phone: S('Nombor telefon, cth. 0123456789'), text: S('Mesej yang hendak ditaip') },
+    run: a => ['open', ['whatsapp://send?phone=' + phone(a.phone) + '&text=' + encodeURIComponent(text(a.text, 4000))]] },
+  flights: { d: 'Cari penerbangan di Google Flights dan buka hasilnya (harga, masa, syarikat penerbangan). Jarvis tidak menempah atau membayar; pengguna tempah sendiri.', p: { from: S('Bandar atau kod lapangan terbang asal, cth. KUL'), to: S('Destinasi, cth. Tokyo'), date: S('Tarikh pergi YYYY-MM-DD'), back: S('Tarikh balik YYYY-MM-DD (kosongkan jika sehala)'), people: N('Bilangan penumpang, lalai 1') }, opt: ['back', 'people'],
+    run: a => {
+      const q = `Flights from ${text(a.from, 60)} to ${text(a.to, 60)} on ${isoDate(a.date)}` + (a.back ? ` returning ${isoDate(a.back)}` : ' one way')
+        + (a.people !== undefined ? ` for ${int(a.people, 1, 9)} passengers` : '');
+      return browse('https://www.google.com/travel/flights?q=' + encodeURIComponent(q), 'google.com/travel');
+    } },
   calculate: { d: 'Kira dengan tepat (matematik, Matematik Tambahan, peratus, wang). Sudut trigonometri dalam radian; guna rad(30) untuk darjah. log = log10, ln = log asli.', p: { expression: S('cth. (2*3+sqrt(16))^2/7, sin(rad(30)), ln(5)') },
     run: a => [process.execPath, ['-e', CALC, mathExpr(a.expression)]] },
   read_web: { d: 'Baca teks sesuatu laman web (cerita, hikayat, artikel, nota pelajaran) tanpa membukanya di skrin. Guna untuk membaca cerita atau fakta dari laman yang dijumpai melalui carian.', p: { url: S('URL penuh bermula https://') },
@@ -522,13 +538,14 @@ function isLocal(headers, port) {
 // Permission groups shown as switches in Settings. Every tool belongs to exactly one group (test.js checks this).
 const GROUPS = {
   music:     ['Spotify dan Muzik', ['media', 'now_playing', 'play_song']],
+  chat:      ['WhatsApp', ['whatsapp_message']],
   mail:      ['Emel (Mail dan Outlook)', ['mail_inbox', 'mail_read', 'mail_draft_reply', 'mail_draft', 'mail_send', 'mail_send_reply', 'outlook_draft']],
   calendar:  ['Kalendar', ['calendar_events', 'calendar_add']],
   reminders: ['Peringatan dan alarm', ['reminder_add', 'reminders_list']],
   notes:     ['Nota', ['note_add', 'notes_search']],
   contacts:  ['Kenalan', ['contacts_search']],
   photos:    ['Foto', ['photos_search']],
-  web:       ['Browser, carian web dan kalkulator', ['news', 'weather', 'exchange_rate', 'calculate', 'search_web', 'read_web', 'open_url', 'web_search', 'youtube', 'maps', 'browser_tab', 'close_tab']],
+  web:       ['Browser, carian web dan kalkulator', ['flights', 'news', 'weather', 'exchange_rate', 'calculate', 'search_web', 'read_web', 'open_url', 'web_search', 'youtube', 'maps', 'browser_tab', 'close_tab']],
   files:     ['Fail dan storan', ['open_folder', 'find_files', 'open_file', 'trash_file', 'storage_scan', 'disk_space']],
   apps:      ['Buka dan tutup aplikasi', ['open_app', 'quit_app', 'list_apps', 'open_any']],
   system:    ['Sistem (bunyi, Wi-Fi, tidur, restart)', ['set_volume', 'mute', 'dark_mode', 'wifi', 'battery', 'now', 'system_stats', 'sleep_display', 'sleep_mac', 'restart', 'shutdown']],

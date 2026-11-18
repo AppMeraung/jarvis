@@ -14,6 +14,7 @@ const SAMPLES = {
   media: { app: 'Spotify', action: 'next' }, now_playing: { app: 'Music' }, play_song: { query: 'Sudirman' },
   mail_inbox: {}, projects_status: {}, mail_read: { id: 12 }, mail_draft_reply: { id: 12, body: 'Terima kasih' },
   mail_draft: { to: 'ali@example.com', subject: 'Hai', body: 'Apa khabar' },
+  whatsapp_message: { phone: '012-345 6789', text: 'Ok, jumpa esok' }, flights: { from: 'KUL', to: 'Tokyo', date: '2026-12-10', back: '2026-12-17' },
   calendar_events: { days: 3 }, calendar_add: { title: 'Mesyuarat', start: '2026-11-20T15:30', minutes: 60 },
   reminder_add: { title: 'Beli susu', due: '2026-11-20T09:00' }, reminders_list: {},
   note_add: { title: 'Idea', body: 'Isi' }, notes_search: { query: 'Idea' },
@@ -372,4 +373,14 @@ test('live world tools pass what the user said only as arguments, and check curr
   assert.ok(plan('weather', { city: 'Kota $(Bharu)' })[1].includes('Kota%20%24(Bharu)'));
   assert.deepStrictEqual(plan('exchange_rate', { from: 'usd', to: 'myr, sgd', amount: 50 })[1].slice(-2), ['MYR,SGD', '50']);
   for (const bad of [{ from: 'US', to: 'MYR' }, { from: 'USD', to: 'MYR;ls' }, { from: '$(x)', to: 'MYR' }]) assert.throws(() => plan('exchange_rate', bad));
+});
+
+test('WhatsApp opens a typed reply without sending it, and flights only search', () => {
+  assert.deepStrictEqual(plan('whatsapp_message', { phone: '012-345 6789', text: 'Jumpa & makan?' }), ['open', ['whatsapp://send?phone=60123456789&text=Jumpa%20%26%20makan%3F']]);
+  assert.strictEqual(plan('whatsapp_message', { phone: '+65 9123 4567', text: 'hi' })[1][0], 'whatsapp://send?phone=6591234567&text=hi');
+  for (const bad of [{ phone: '123', text: 'hi' }, { phone: '0123456789;ls', text: 'hi' }, { phone: '0123456789', text: '' }]) assert.throws(() => plan('whatsapp_message', bad));
+  const argv = plan('flights', { from: 'KUL', to: 'Tokyo', date: '2026-12-10', people: 2 })[1];
+  assert.ok(argv.includes('https://www.google.com/travel/flights?q=' + encodeURIComponent('Flights from KUL to Tokyo on 2026-12-10 one way for 2 passengers')));
+  assert.throws(() => plan('flights', { from: 'KUL', to: 'Tokyo', date: '10/12/2026' }));
+  assert.ok(!confirm.includes('whatsapp_message'));   // it never sends, so no approval needed
 });
