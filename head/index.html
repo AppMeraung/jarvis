@@ -42,6 +42,12 @@ const MOOD = {
 };
 const KEYS = [...MORPHS, 'squint', 'wink', 'look'];
 
+// ?net=1 draws the head as a sparse web of glowing dots and lines instead of a solid robot.
+// The dots sit on the model's own surface, so the lips and jaw still move with every word.
+const Q = new URLSearchParams(location.search), NET = Q.has('net');
+// ?c=<id> shows a character the user added. ?mark=1 lets the user click its mouth and eyes once.
+const CHAR = Q.get('c'), MARK = Q.has('mark');
+
 const state = { mood: 'neutral', intensity: 1, listening: false, level: 0, bright: .5 };
 window.FacePoly = {
   expressions: Object.keys(MOOD),
@@ -61,36 +67,255 @@ document.body.append(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(30, 1, .1, 50);
 
-let mesh, head, fit, index;
-new GLTFLoader().load('/head/model.glb', gltf => {
-  gltf.scene.traverse(o => { if (o.morphTargetInfluences) mesh = o; if (o.name === 'Head') head = o; });
+let mesh, head, fit, index, net, puppet;
+new GLTFLoader().load(CHAR ? `/characters/${encodeURIComponent(CHAR)}/model.glb` : '/head/model.glb', async gltf => {
+  gltf.scene.traverse(o => { if (o.morphTargetDictionary?.jawOpen !== undefined) mesh = o; if (o.name === 'Head') head = o; });
+  if (!mesh) {                                // a model without face controls: the face is moved by the shader instead
+    const info = (await fetch('/characters').then(r => r.json()).catch(() => [])).find(c => c.id === CHAR) || {};
+    puppet = buildPuppet(gltf.scene, info);
+    head = puppet.pivot;
+    fit = puppet.size;
+    scene.add(puppet.pivot);
+    resize();
+    window.FacePoly.ready = true;
+    return;
+  }
   index = MORPHS.map(name => mesh.morphTargetDictionary[name]);
   mesh.frustumCulled = false;                 // the bounding box does not follow the bone, so never cull
-  const box = new THREE.Box3().setFromObject(gltf.scene);
-  fit = box.getSize(new THREE.Vector3());
-  gltf.scene.position.sub(box.getCenter(new THREE.Vector3()));
-  scene.add(gltf.scene);
+  head ||= gltf.scene;
+  if (NET) {
+    net = buildNet();
+    fit = net.size;
+    scene.add(net.group);
+  } else {
+    const box = new THREE.Box3().setFromObject(gltf.scene);
+    fit = box.getSize(new THREE.Vector3());
+    gltf.scene.position.sub(box.getCenter(new THREE.Vector3()));
+    scene.add(gltf.scene);
+  }
   resize();
   window.FacePoly.ready = true;
 }, undefined, err => { document.body.textContent = 'Model gagal dimuat: ' + err.message; });
 
+// Face movement for any model: the vertices around the marked mouth and eyes are moved on the graphics card.
+// The jaw drops, the lips stretch for "i/e" and purse for "o/u", the corners lift for a smile, the gap darkens,
+// and the eyes close to blink, narrow when angry and widen when surprised.
+const face = { open: 0, wide: 0, round: 0, smile: 0, blinkL: 0, blinkR: 0, wideEye: 0 };
+function buildPuppet(model, info) {
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
+  const sun = new THREE.DirectionalLight(0xffffff, 2);
+  sun.position.set(1, 2, 3);
+  scene.add(sun);
+  const box = new THREE.Box3().setFromObject(model), size = box.getSize(new THREE.Vector3());
+  const centre = box.getCenter(new THREE.Vector3());
+  const pivot = new THREE.Group(), holder = new THREE.Group();
+  holder.add(model);
+  holder.position.copy(centre).negate();      // rotate around the middle of the model
+  pivot.add(holder);
+  const R = info.size || Math.max(size.x, size.y, size.z) * .08;
+  const u = {
+    uMouth: { value: new THREE.Vector3(...(info.mouth || [1e6, 1e6, 1e6])) },
+    uEye0: { value: new THREE.Vector3(...(info.eyes?.[0] || [1e6, 1e6, 1e6])) },
+    uEye1: { value: new THREE.Vector3(...(info.eyes?.[1] || [1e6, 1e6, 1e6])) },
+    uR: { value: R }, uOpen: { value: 0 }, uWide: { value: 0 }, uRound: { value: 0 }, uSmile: { value: 0 },
+    uBlink0: { value: 0 }, uBlink1: { value: 0 }, uWideEye: { value: 0 }, uLook: { value: 0 },
+    uOrigin: { value: new THREE.Matrix4() },  // model space of the marks -> world, updated every frame
+  };
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false;
+    for (const mat of [o.material].flat()) mat.onBeforeCompile = sh => {
+      Object.assign(sh.uniforms, u);
+      sh.vertexShader = `uniform vec3 uMouth, uEye0, uEye1; uniform float uR, uOpen, uWide, uRound, uSmile, uBlink0, uBlink1, uWideEye, uLook;
+uniform mat4 uOrigin; varying float vGap;
+vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
+  vec3 e = wp - eye;
+  float g = 1.0 - smoothstep(0.0, uR * 0.9, length(e));
+  float iris = 1.0 - smoothstep(0.0, uR * 0.45, length(e));
+  float lid = e.y > 0.0 ? 1.0 : 0.35;                     // the upper lid travels further than the lower
+  return vec3(uLook * iris * uR * 0.18,                    // the iris looks left and right
+              -e.y * g * blink * lid + e.y * g * uWideEye * 0.6, 0.0);   // squeeze shut, or open wide
+}
+` + sh.vertexShader.replace('#include <begin_vertex>', `vec3 transformed = vec3(position);
+{
+  vec3 wp = (modelMatrix * vec4(position, 1.0)).xyz;
+  vec3 mouth = (uOrigin * vec4(uMouth, 1.0)).xyz, m = wp - mouth;
+  float f = 1.0 - smoothstep(0.0, uR, length(m));
+  float below = step(m.y, 0.0), side = abs(m.x) / uR;
+  vec3 d = vec3(0.0);
+  d.y -= f * below * uOpen * uR * 0.6;                    // jaw and lower lip drop
+  d.y += f * (1.0 - below) * uOpen * uR * 0.12;           // upper lip lifts a little
+  d.x += m.x * f * (uWide - uRound * 0.8) * 0.45;         // "i/e" stretch, "o/u" purse
+  d.z += f * uRound * uR * 0.15;                          // lips push forward for "o/u"
+  d.y += f * uSmile * uR * 0.3 * side;                    // corners up for a smile, down for a frown
+  vGap = f * uOpen * (1.0 - smoothstep(0.0, uR * 0.22, abs(m.y)));
+  d += eyeMove(wp, (uOrigin * vec4(uEye0, 1.0)).xyz, uBlink0);
+  d += eyeMove(wp, (uOrigin * vec4(uEye1, 1.0)).xyz, uBlink1);
+  transformed += inverse(mat3(modelMatrix)) * d;
+}`);
+      sh.fragmentShader = 'varying float vGap;\n' + sh.fragmentShader.replace('#include <dithering_fragment>',
+        '#include <dithering_fragment>\ngl_FragColor.rgb *= 1.0 - clamp(vGap, 0.0, 1.0) * 0.85;');   // inside of the open mouth
+    };
+  });
+  return { pivot, model, u, size, marked: !!info.mouth };
+}
+
+// ?mark=1: click the mouth, then each eye. The points are saved with the character.
+if (MARK) {
+  const note = Object.assign(document.createElement('div'), { style: 'position:fixed;top:12px;left:0;right:0;text-align:center;font:600 15px system-ui;color:#fff;text-shadow:0 1px 4px #000' });
+  const steps = ['Klik tengah MULUT watak', 'Klik MATA pertama (atau tekan Siap jika tiada mata)', 'Klik MATA kedua (atau tekan Siap)'];
+  const done = Object.assign(document.createElement('button'), { textContent: 'Siap', style: 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);font:600 15px system-ui;padding:8px 22px' });
+  document.body.append(note, done);
+  const marks = [];
+  note.textContent = steps[0];
+  const save = async () => {
+    if (!marks.length) return;
+    const body = { mouth: marks[0], eyes: marks.slice(1) };
+    await fetch('/characters/' + encodeURIComponent(CHAR), { method: 'POST', body: JSON.stringify(body) });
+    note.textContent = 'Disimpan. Tutup tetingkap ini.';
+    done.remove();
+  };
+  done.onclick = save;
+  renderer.domElement.onclick = e => {
+    if (!puppet) return;
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1), camera);
+    const hit = ray.intersectObject(puppet.model, true)[0];
+    if (!hit) return;
+    marks.push(puppet.model.worldToLocal(hit.point.clone()).toArray());
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(puppet.u.uR.value * .15), new THREE.MeshBasicMaterial({ color: 0xff3366 }));
+    dot.position.copy(hit.point);
+    scene.add(dot);
+    if (marks.length === 3) save(); else note.textContent = steps[marks.length];
+  };
+}
+
+// A soft round glow for each dot.
+function glowDot() {
+  const c = Object.assign(document.createElement('canvas'), { width: 64, height: 64 }), g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, '#fff'); r.addColorStop(.25, 'rgba(255,255,255,.85)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
+// Chosen by eye against the owner's reference picture: dot spacing (lips and rest), how much neck, turn, distance, mouth boost.
+const TUNE = { m: .012, cut: 1.2, yaw: .45, z: 2.7, k: 2.6, cell: .045 };
+// Per kind of node (skin, eyes and brows, lips): size and brightness.
+const DOT_LOOK = [[.026, .9], [.028, 1], [.028, 1]];
+// The web's colour shows the mood at a glance.
+const MOOD_COLOUR = { neutral: 0x55d0ff, happy: 0x5dffcf, excited: 0x9dff7a, angry: 0xff5a4a, sad: 0x6f7dff, thinking: 0xb88cff,
+  confused: 0xffcf5a, surprised: 0xe8f6ff, daydreaming: 0x8fb8ff, wink: 0x5dffcf };
+function buildNet() {
+  const g = mesh.geometry, pos = g.attributes.position, morphs = g.morphAttributes.position, idx = g.index;
+  const top = new THREE.Box3().setFromBufferAttribute(pos).max.y;
+  const dict = mesh.morphTargetDictionary;
+  const talk = ['jawOpen', 'mouthPucker', 'mouthWide', 'upperLipRaise', 'mouthSmile', 'mouthFrown'].map(n => dict[n]);
+  const look = ['eyeBlinkLeft', 'eyeBlinkRight', 'browRaise', 'browAngry'].map(n => dict[n]);
+
+  // A clean low-poly copy of the head: every vertex falls into a small cube, each cube becomes one node, and every
+  // original triangle that touches three different cubes becomes a triangle between their nodes (vertex clustering).
+  const cellOf = new Int32Array(pos.count).fill(-1), ids = new Map(), sum = [], moves = [];
+  const T = morphs.length;
+  for (let v = 0; v < pos.count; v++) {
+    const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
+    if (y < top - TUNE.cut) continue;                              // head and a little neck, no shoulders
+    const key = `${Math.floor(x / TUNE.cell)},${Math.floor(y / TUNE.cell)},${Math.floor(z / TUNE.cell)}`;
+    let id = ids.get(key);
+    if (id === undefined) { id = sum.length; ids.set(key, id); sum.push(new Float64Array(4 + T * 3)); moves.push([0, 0]); }
+    cellOf[v] = id;
+    const c = sum[id];
+    c[0] += x; c[1] += y; c[2] += z; c[3]++;
+    for (let t = 0; t < T; t++) {
+      const m = morphs[t], dx = m.getX(v), dy = m.getY(v), dz = m.getZ(v);
+      c[4 + t * 3] += dx; c[5 + t * 3] += dy; c[6 + t * 3] += dz;
+      const len = Math.hypot(dx, dy, dz);
+      if (talk.includes(t)) moves[id][0] = Math.max(moves[id][0], len);
+      if (look.includes(t)) moves[id][1] = Math.max(moves[id][1], len);
+    }
+  }
+  const edges = new Set();
+  for (let t = 0; t < idx.count; t += 3) {
+    const a = cellOf[idx.getX(t)], b = cellOf[idx.getX(t + 1)], c = cellOf[idx.getX(t + 2)];
+    if (a < 0 || b < 0 || c < 0 || a === b || b === c || a === c) continue;
+    for (const [p, q] of [[a, b], [b, c], [a, c]]) edges.add(Math.min(p, q) * 1e6 + Math.max(p, q));
+  }
+
+  // Nodes, grouped: 0 skin, 1 eyes and brows, 2 lips and jaw (these flare when speaking).
+  const kindOf = id => moves[id][0] > TUNE.m ? 2 : moves[id][1] > TUNE.m * .5 ? 1 : 0;
+  const order = sum.map((_, id) => id).sort((a, b) => kindOf(a) - kindOf(b)), slot = new Int32Array(sum.length);
+  order.forEach((id, i) => { slot[id] = i; });
+  const n = order.length, base = new Float32Array(n * 3), deltas = morphs.map(() => new Float32Array(n * 3));
+  const box = new THREE.Box3();
+  order.forEach((id, i) => {
+    const c = sum[id];
+    base.set([c[0] / c[3], c[1] / c[3], c[2] / c[3]], i * 3);
+    box.expandByPoint(new THREE.Vector3(c[0] / c[3], c[1] / c[3], c[2] / c[3]));
+    // The web is sparse, so the speaking shapes are made bigger than on the solid robot to be seen.
+    for (let t = 0; t < T; t++) deltas[t].set([c[4 + t * 3] / c[3] * TUNE.k, c[5 + t * 3] / c[3] * TUNE.k, c[6 + t * 3] / c[3] * TUNE.k], i * 3);
+  });
+  const centre = box.getCenter(new THREE.Vector3());
+  for (let i = 0; i < n; i++) { base[i * 3] -= centre.x; base[i * 3 + 1] -= centre.y; base[i * 3 + 2] -= centre.z; }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(base, 3));
+  geo.morphAttributes.position = deltas.map(d => new THREE.BufferAttribute(d, 3));
+  geo.morphTargetsRelative = g.morphTargetsRelative;
+  let from = 0;
+  for (let kind = 0; kind < 3; kind++) {
+    const count = order.filter(id => kindOf(id) === kind).length;
+    geo.addGroup(from, count, kind);
+    from += count;
+  }
+  const pairs = [];
+  const far = (TUNE.cell * 3.4) ** 2;                               // long slivers from big flat panels only add clutter
+  for (const e of edges) {
+    const i = slot[Math.floor(e / 1e6)], j = slot[e % 1e6];
+    if ((base[i * 3] - base[j * 3]) ** 2 + (base[i * 3 + 1] - base[j * 3 + 1]) ** 2 + (base[i * 3 + 2] - base[j * 3 + 2]) ** 2 < far) pairs.push(i, j);
+  }
+  const lineGeo = geo.clone();
+  lineGeo.clearGroups();
+  lineGeo.setIndex(pairs);
+
+  const glow = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending };
+  const dot = glowDot();
+  const dots = new THREE.Points(geo, DOT_LOOK.map(([size, opacity]) => new THREE.PointsMaterial({ ...glow, size, opacity, map: dot })));
+  const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ ...glow, opacity: .55 }));
+  for (const o of [dots, lines]) {           // same face controls as the hidden robot, so they move together
+    o.morphTargetInfluences = mesh.morphTargetInfluences;
+    o.morphTargetDictionary = mesh.morphTargetDictionary;
+    o.frustumCulled = false;
+  }
+
+  // Loose sparks drifting off the back of the head.
+  const size = box.getSize(new THREE.Vector3()), sparkCount = 160, spark = new Float32Array(sparkCount * 3);
+  for (let i = 0; i < sparkCount; i++) spark.set([(Math.random() - .2) * size.x * 1.3, (Math.random() - .5) * size.y * 1.2, -Math.random() * size.z * .9], i * 3);
+  const sparkGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(spark, 3));
+  const sparks = new THREE.Points(sparkGeo, new THREE.PointsMaterial({ ...glow, size: .02, map: glowDot(), color: 0x3fa9ff, opacity: .7 }));
+
+  const group = new THREE.Group();
+  group.add(lines, dots, sparks);
+  return { group, dots, lines, sparks, size };
+}
+
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight || 1;
-  if (fit) camera.position.z = Math.max(fit.y, fit.x / camera.aspect) * 2.1;   // whole bust visible at any window shape
+  if (fit) camera.position.z = Math.max(fit.y, fit.x / camera.aspect) * (NET ? TUNE.z : puppet ? 1.9 : 2.1);   // whole bust visible at any window shape
+  // The far side of the web fades into the dark, so the near side's nose, lips and chin read as a face.
+  if (NET && fit) scene.fog = new THREE.Fog(0x000000, camera.position.z - fit.z * .2, camera.position.z + fit.z * .9);
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
 resize();
 
-const tint = new THREE.Color(), target = new THREE.Color();
+const tint = new THREE.Color(), target = new THREE.Color(), hue = new THREE.Color(0x55d0ff), want = new THREE.Color();
 const now = Object.fromEntries(KEYS.map(k => [k, 0]));
 const mouth = MORPHS.map(() => 0);
 let speech = 0, blinkAt = 2, lastLevel = 0, saccade = 0, glance = 0, gaze = 0;
 const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 
 renderer.setAnimationLoop(ms => {
-  if (!mesh) return;
+  if (!head) return;
   const t = ms / 1000, m = MOOD[state.mood], k = state.intensity;
   for (const key of KEYS) now[key] += ((m[key] || 0) * k - now[key]) * .1;
 
@@ -118,15 +343,46 @@ renderer.setAnimationLoop(ms => {
     if (name === 'eyeLookHorizontal') v = gaze;
     if (name === 'cheekLift') v += amount * .1;
     if (name === 'browRaise') v += amount * .1;
-    mesh.morphTargetInfluences[index[i]] = THREE.MathUtils.clamp(v, name === 'eyeLookHorizontal' ? -1 : 0, 1);
+    v = THREE.MathUtils.clamp(v, name === 'eyeLookHorizontal' ? -1 : 0, 1);
+    if (mesh) mesh.morphTargetInfluences[index[i]] = v;
+    else face[name] = v;
   });
+  if (puppet) {                               // the same face controls drive the shader-moved face
+    const u = puppet.u;
+    u.uOpen.value = face.jawOpen;
+    u.uWide.value = face.mouthWide;
+    u.uRound.value = face.mouthPucker;
+    u.uSmile.value = face.mouthSmile - face.mouthFrown;
+    u.uBlink0.value = Math.min(1, face.eyeBlinkLeft + now.squint);   // cartoon eyes react twice as much
+    u.uBlink1.value = Math.min(1, face.eyeBlinkRight + now.squint);
+    u.uLook.value = gaze;
+    u.uWideEye.value = Math.max(0, face.browRaise - face.eyeBlinkLeft) * (state.mood === 'surprised' || state.mood === 'excited' ? 1 : .3);
+    u.uOrigin.value.copy(puppet.model.matrixWorld);
+  }
 
   const ease = .06, r = head.rotation;
   r.y += (m.pose[0] * k + Math.sin(t * .5) * .05 + glance - r.y) * ease;
   r.x += (m.pose[1] * k + Math.sin(t * .8) * .02 + speech * .04 + (state.listening ? -.04 : 0) - r.x) * ease;
   r.z += (m.pose[2] * k + glance * .3 - r.z) * ease;
   tint.lerp(target.set(m.tint), .08);
-  mesh.material.color.copy(tint).multiplyScalar(1 + speech * .08);
+  if (net) {
+    // The web turns a little to the side like the picture, follows the head pose, and glows brighter on each syllable.
+    net.group.rotation.set(r.x, r.y - TUNE.yaw, r.z);
+    hue.lerp(want.set(MOOD_COLOUR[state.mood] || MOOD_COLOUR.neutral), .08);
+    net.dots.material.forEach((mat, kind) => {
+      const flare = kind === 2 ? speech * 1.2 : kind === 1 ? speech * .3 : speech * .1;   // the lips flare on every syllable
+      mat.size = DOT_LOOK[kind][0] * (1 + flare);
+      mat.color.copy(hue).multiplyScalar(1 + flare);
+    });
+    net.lines.material.color.copy(hue).multiplyScalar(.85 + speech * .3);
+    net.sparks.material.color.copy(hue);
+    net.sparks.rotation.y = Math.sin(t * .15) * .08;
+    net.sparks.position.y = Math.sin(t * .4) * .01;
+  } else if (puppet) {
+    // A cartoon has a body: it bobs and squashes a little with each syllable.
+    puppet.pivot.position.y = speech * fit.y * .015;
+    puppet.pivot.scale.set(1 - speech * .015, 1 + speech * .025, 1 - speech * .015);
+  } else mesh.material.color.copy(tint).multiplyScalar(1 + speech * .08);
   renderer.render(scene, camera);
 });
 

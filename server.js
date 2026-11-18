@@ -2,7 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, envWithKey, cleanSettings } = require('./tools');
+const { plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, envWithKey, cleanSettings, cleanCharacter } = require('./tools');
 
 const PORT = +process.env.PORT || 4199;
 const file = f => path.join(__dirname, f);
@@ -28,6 +28,20 @@ function off() {
 
 const pages = new Set();
 let wokeAt = 0;
+
+// Characters the user added live in characters/<id>/ as model.glb and character.json.
+const CHARS = file('characters');
+const charDir = id => /^[a-z0-9-]{1,40}$/.test(id) && path.join(CHARS, id);
+function characters() {
+  let ids = [];
+  try { ids = fs.readdirSync(CHARS).filter(charDir); } catch {}
+  return ids.filter(id => fs.existsSync(path.join(CHARS, id, 'model.glb'))).map(id => {
+    let data = {};
+    try { data = JSON.parse(fs.readFileSync(path.join(CHARS, id, 'character.json'), 'utf8')); } catch {}
+    return { id, name: id, ...cleanCharacter(data) };
+  });
+}
+const tellPages = () => { for (const page of pages) page.write('event: settings\ndata: 1\n\n'); };
 
 const json = (res, code, body) => {
   res.writeHead(code, { 'content-type': 'application/json' });
@@ -72,6 +86,51 @@ http.createServer((req, res) => {
     });
     return;
   }
+  const charRoute = route.match(/^\/characters\/([^/]+)(\/model\.glb)?$/);
+  if (req.method === 'GET' && route === '/characters') return json(res, 200, characters());
+  if (req.method === 'GET' && charRoute?.[2]) {
+    const dir = charDir(charRoute[1]);
+    if (!dir || !fs.existsSync(path.join(dir, 'model.glb'))) return json(res, 404, { error: 'not found' });
+    res.writeHead(200, { 'content-type': 'model/gltf-binary' });
+    return fs.createReadStream(path.join(dir, 'model.glb')).pipe(res);
+  }
+  if (req.method === 'POST' && route === '/characters') {   // body: the .glb file itself; ?name= its name
+    const name = new URL(req.url, 'http://x').searchParams.get('name') || 'Watak';
+    const id = (name.toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'watak')
+      + '-' + Math.random().toString(36).slice(2, 6);
+    const dir = path.join(CHARS, id), parts = [];
+    let size = 0;
+    req.on('data', c => { size += c.length; if (size > 200e6) req.destroy(); else parts.push(c); });
+    req.on('end', () => {
+      const glb = Buffer.concat(parts);
+      if (glb.subarray(0, 4).toString() !== 'glTF') return json(res, 400, { error: 'Fail mesti model .glb' });
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'model.glb'), glb);
+      fs.writeFileSync(path.join(dir, 'character.json'), JSON.stringify(cleanCharacter({ name })));
+      tellPages();
+      json(res, 200, { id });
+    });
+    return;
+  }
+  if ((req.method === 'POST' || req.method === 'DELETE') && charRoute && !charRoute[2]) {
+    const dir = charDir(charRoute[1]);
+    if (!dir || !fs.existsSync(dir)) return json(res, 404, { error: 'not found' });
+    if (req.method === 'DELETE') { fs.rmSync(dir, { recursive: true }); tellPages(); return json(res, 200, { result: 'ok' }); }
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 5000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const now = characters().find(c => c.id === charRoute[1]);
+        delete now.id;
+        fs.writeFileSync(path.join(dir, 'character.json'), JSON.stringify({ ...now, ...cleanCharacter(JSON.parse(body)) }));
+        tellPages();
+        json(res, 200, { result: 'ok' });
+      } catch (err) {
+        json(res, 400, { error: err.message });
+      }
+    });
+    return;
+  }
   if (req.method === 'GET' && route === '/settings') {
     let saved = {};
     try { saved = cleanSettings(JSON.parse(fs.readFileSync(file('settings.json'), 'utf8'))); } catch {}
@@ -83,7 +142,7 @@ http.createServer((req, res) => {
     req.on('end', () => {
       try {
         fs.writeFileSync(file('settings.json'), JSON.stringify(cleanSettings(JSON.parse(body))));
-        for (const page of pages) page.write('event: settings\ndata: 1\n\n');   // every other window reloads them
+        tellPages();   // every other window reloads them
         json(res, 200, { result: 'ok' });
       } catch (err) {
         json(res, 400, { error: err.message });

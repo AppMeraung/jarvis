@@ -141,6 +141,7 @@
   .mini .panel::before, .mini .panel::after { display: none; }
   .mini #core { padding: 0; min-height: 0; flex: none; }
   .mini #head { width: 214px; height: 257px; max-height: none; aspect-ratio: auto; cursor: grab; }
+  .mini #power + button, .mini #quit, .mini .miniOnly { padding: 6px 10px; }
   .mini button { border-radius: 999px; padding: 6px 14px; font-size: 11px; background: #03101ae6; }
   .mini aside { min-height: 0; flex: none; width: 210px; }
   .mini #log { padding: 0; overflow: hidden; }
@@ -156,6 +157,7 @@
   <span><span id="clock">--:--:--</span> <span id="date"></span></span>
   <span id="status" role="status">OFFLINE</span>
   <button id="help" class="small" aria-haspopup="dialog">ⓘ PANDUAN</button>
+  <button id="swap" class="small" title="Tukar watak">🎭 WATAK</button>
   <button id="gear" class="small" aria-haspopup="dialog">⚙ TETAPAN</button>
 </header>
 <main>
@@ -221,7 +223,7 @@
     <div id="head"><iframe id="face" title="Wajah Jarvis" tabindex="-1"></iframe></div>
     <div id="caption" aria-hidden="true"></div>
     <canvas id="wave" width="520" height="40" aria-hidden="true"></canvas>
-    <span><button id="power">MULA</button> <button id="quit" aria-label="Tutup Jarvis mini" hidden>×</button></span>
+    <span><button id="power">MULA</button> <button id="miniSwap" class="miniOnly" aria-label="Tukar watak" hidden>🎭</button> <button id="miniSize" class="miniOnly" aria-label="Tukar saiz" hidden>S</button> <button id="quit" aria-label="Tutup Jarvis mini" hidden>×</button></span>
     <div id="chips" aria-label="Arahan pantas">
       <button data-say="Beri taklimat harian saya.">Taklimat harian</button>
       <button data-say="Semak emel saya, mana yang penting dan belum dibalas?">Semak emel</button>
@@ -273,8 +275,15 @@
       <label><span class="k">SUARA</span><select id="sVoice"></select></label>
       <label><span class="k">GAYA BERCAKAP</span><select id="sStyle"></select></label>
       <label><span class="k">PANGGILAN UNTUK ANDA</span><input type="text" id="sCall" maxlength="30" autocomplete="off"></label>
-      <label><span class="k">WAJAH</span><select id="sFace">
-        <option value="head">Robot 3D</option><option value="facepoly">FacePoly (2D)</option></select></label>
+      <label><span class="k">WATAK</span><select id="sFace"></select></label>
+      <fieldset id="charBox" hidden><legend class="k">WATAK INI</legend>
+        <label><span class="k">SUARA WATAK</span><select id="cVoice"></select></label>
+        <label><span class="k">NADA SUARA</span><input type="range" id="cPitch" min="0.7" max="1.6" step="0.05"></label>
+        <label><span class="k">PERWATAKAN DAN CIRI KHAS</span><textarea id="cPersona" rows="4" maxlength="600" placeholder="Cth: ceria, suka ketawa, sebut &quot;Banana!&quot; bila gembira"></textarea></label>
+        <span><button type="button" id="cMark" class="small">Tandakan mulut dan mata</button> <button type="button" id="cDel" class="small">Padam watak</button></span>
+      </fieldset>
+      <label><span class="k">TAMBAH WATAK (MODEL 3D .GLB)</span><input type="file" id="cAdd" accept=".glb,model/gltf-binary"></label>
+      <label><span class="k">SAIZ JARVIS MINI</span><select id="sMini"><option value="s">Kecil</option><option value="m">Sederhana</option><option value="l">Besar</option></select></label>
       <label class="check"><input type="checkbox" id="sBrief"> Beri taklimat harian setiap kali MULA</label>
       <label class="check"><input type="checkbox" id="sWake"> Sebut "Hai Jarvis" untuk mula, "Bye Jarvis" untuk henti</label>
       <div><span class="k">WARNA TEMA</span><div id="swatches" role="group" aria-label="Warna tema"></div></div>
@@ -295,7 +304,7 @@ const LANGS = { ms: 'Bahasa Melayu', en: 'English', id: 'Bahasa Indonesia', zh: 
 const VOICES = ['Fenrir', 'Charon', 'Orus', 'Puck', 'Zephyr', 'Kore', 'Aoede', 'Leda'];
 const STYLES = { santai: 'santai dan ringkas', formal: 'formal dan sopan', ceria: 'ceria dengan sedikit jenaka' };
 const THEMES = ['#35d6ff', '#3dffb0', '#ffc23d', '#b58cff'];
-const DEFAULTS = { lang: 'ms', voice: '', style: 'santai', call: 'Tuan', face: 'head', brief: true, wake: true, theme: THEMES[0] };
+const DEFAULTS = { lang: 'ms', voice: '', style: 'santai', call: 'Tuan', face: 'head', brief: true, wake: true, mini: 'm', theme: THEMES[0] };
 let S = { ...DEFAULTS };
 try { Object.assign(S, JSON.parse(localStorage.getItem('jarvis') || '{}')); } catch {}   // private windows may block storage
 if (!LANGS[S.lang]) S.lang = 'ms';
@@ -303,7 +312,7 @@ if (!STYLES[S.style]) S.style = 'santai';
 if (!THEMES.includes(S.theme)) S.theme = THEMES[0];
 
 // ---------- Interface language: Malay is the source text; English and Indonesian come from this table ----------
-const UI = { en: {"ⓘ PANDUAN": "ⓘ GUIDE", "⚙ TETAPAN": "⚙ SETTINGS", "01 · SISTEM": "01 · SYSTEM", "BATERI": "BATTERY", "STORAN": "STORAGE", "MEMORI": "MEMORY", "VOLUM": "VOLUME", "RANGKAIAN": "NETWORK", "HIDUP SEJAK": "UPTIME", "Tekan ↻ untuk semak kalendar dan peringatan.": "Press ↻ to check calendar and reminders.", "03 · MUZIK": "03 · MUSIC", "04 · APLIKASI AKTIF": "04 · RUNNING APPS", "SUARA": "VOICE", "BAHASA": "LANGUAGE", "KEBOLEHAN": "ABILITIES", "SESI": "SESSION", "ALAT DIGUNA": "TOOLS USED", "EMOSI": "MOOD", "KEADAAN": "STATE", "WAJAH": "FACE", "MIKROFON": "MICROPHONE", "SUARA JARVIS": "JARVIS VOICE", "MULA": "START", "HENTI": "STOP", "Taklimat harian": "Daily briefing", "Semak emel": "Check email", "Projek tertangguh": "Pending projects", "Jadual minggu ini": "This week's schedule", "Semak storan": "Check storage", "Main muzik": "Play music", "06 · KOMUNIKASI": "06 · CONVERSATION", "KOSONGKAN": "CLEAR", "HANTAR": "SEND", "07 · AKTIVITI ALAT": "07 · TOOL ACTIVITY", "Taip arahan…": "Type a command…", "PELAYAN": "SERVER", "KEBENARAN": "PERMISSIONS", "KUNCI API": "API KEY", "KEMAS KINI TERAKHIR": "LAST UPDATED", "TETAPAN JARVIS": "JARVIS SETTINGS", "KUNCI API GEMINI": "GEMINI API KEY", "Biarkan kosong untuk kekalkan kunci sedia ada": "Leave empty to keep the current key", "Percuma dari aistudio.google.com/apikey. Kunci disimpan di Mac ini sahaja.": "Free from aistudio.google.com/apikey. The key is stored on this Mac only.", "BAHASA (JARVIS DAN PAPARAN)": "LANGUAGE (JARVIS AND SCREEN)", "GAYA BERCAKAP": "SPEAKING STYLE", "PANGGILAN UNTUK ANDA": "WHAT JARVIS CALLS YOU", "Beri taklimat harian setiap kali MULA": "Give a daily briefing on every START", "Sebut \"Hai Jarvis\" untuk mula, \"Bye Jarvis\" untuk henti": "Say \"Hi Jarvis\" to start, \"Bye Jarvis\" to stop", "WARNA TEMA": "THEME COLOUR", "APA YANG JARVIS BOLEH KAWAL": "WHAT JARVIS MAY CONTROL", "Bahasa, suara dan gaya berkuat kuasa pada sesi baharu; sesi yang sedang berjalan akan dimulakan semula.": "Language, voice and style apply to a new session; a running session is restarted.", "BATAL": "CANCEL", "SIMPAN": "SAVE", "TUTUP": "CLOSE", "PANDUAN JARVIS": "JARVIS GUIDE", "Tekan MULA dan bercakap, atau taip arahan di bawah.": "Press START and talk, or type a command below.", "Belum ada alat diguna.": "No tools used yet.", "belum mula": "not started", "SEDIA": "READY", "MENYAMBUNG…": "CONNECTING…", "MENDENGAR": "LISTENING", "BERCAKAP": "SPEAKING", "rehat": "resting", "mengecas": "charging", "guna bateri": "on battery", "penuh": "full", "palam": "plugged in", "kosong": "free", "daripada": "of", "senyap": "muted", "alat": "tools", "kumpulan dimatikan": "groups off", "kumpulan hidup": "groups on", "ada": "set", "tiada": "missing", "tidak diketahui": "unknown", "dimatikan": "switched off", "Tiada internet": "No internet", "Dalam talian": "Online", "Spotify tidak dibuka": "Spotify is not open", "Tiada lagu dimainkan": "Nothing playing", "Dimatikan di Tetapan": "Switched off in Settings", "Buka Spotify dahulu": "Open Spotify first", "Menyemak…": "Checking…", "KALENDAR · 7 HARI": "CALENDAR · 7 DAYS", "PERINGATAN": "REMINDERS", "Tiada.": "None.", "Gagal: ": "Failed: ", "Lalai": "Default", "Spotify dan Muzik": "Spotify and Music", "Emel (Mail dan Outlook)": "Email (Mail and Outlook)", "Kalendar": "Calendar", "Peringatan dan alarm": "Reminders and alarms", "Nota": "Notes", "Kenalan": "Contacts", "Foto": "Photos", "Browser dan carian web": "Browser and web search", "Fail dan storan": "Files and storage", "Buka dan tutup aplikasi": "Open and quit apps", "Sistem (bunyi, Wi-Fi, tidur, restart)": "System (sound, Wi-Fi, sleep, restart)", "Skrin dan papan kekunci": "Screen and keyboard", "Status projek": "Project status", "Skrip bebas (shell dan AppleScript)": "Free scripts (shell and AppleScript)", "Santai dan ringkas": "Casual and brief", "Formal dan sopan": "Formal and polite", "Ceria dengan sedikit jenaka": "Cheerful with a little humour", "Bersambung. Cakap je, ": "Connected. Go ahead, ", "Sambungan tutup": "Connection closed", "Jarvis dimulakan di tetingkap lain, jadi sesi di sini dihentikan.": "Jarvis was started in another window, so the session here was stopped.", "Mikrofon tidak dibenarkan: ": "Microphone not allowed: ", "Belum ada kunci API. Masukkan kunci API Gemini di Tetapan, tekan SIMPAN, kemudian tekan MULA.": "No API key yet. Enter your Gemini API key in Settings, press SAVE, then press START.", "Selamat datang. Langkah pertama: masukkan kunci API Gemini di Tetapan.": "Welcome. First step: enter your Gemini API key in Settings.", "Kunci API disimpan. Tekan MULA.": "API key saved. Press START.", "Kunci API tidak disimpan: ": "API key not saved: ", "Kebenaran gagal disimpan: ": "Permissions not saved: ", "hidup": "on", "mati": "off"}, id: {"ⓘ PANDUAN": "ⓘ PANDUAN", "⚙ TETAPAN": "⚙ PENGATURAN", "01 · SISTEM": "01 · SISTEM", "BATERI": "BATERAI", "STORAN": "PENYIMPANAN", "VOLUM": "VOLUME", "RANGKAIAN": "JARINGAN", "HIDUP SEJAK": "MENYALA SELAMA", "Tekan ↻ untuk semak kalendar dan peringatan.": "Tekan ↻ untuk memeriksa kalender dan pengingat.", "03 · MUZIK": "03 · MUSIK", "04 · APLIKASI AKTIF": "04 · APLIKASI AKTIF", "KEBOLEHAN": "KEMAMPUAN", "ALAT DIGUNA": "ALAT DIPAKAI", "KEADAAN": "STATUS", "MULA": "MULAI", "HENTI": "BERHENTI", "Taklimat harian": "Ringkasan harian", "Semak emel": "Periksa email", "Projek tertangguh": "Proyek tertunda", "Jadual minggu ini": "Jadwal minggu ini", "Semak storan": "Periksa penyimpanan", "Main muzik": "Putar musik", "06 · KOMUNIKASI": "06 · PERCAKAPAN", "HANTAR": "KIRIM", "07 · AKTIVITI ALAT": "07 · AKTIVITAS ALAT", "Taip arahan…": "Ketik perintah…", "PELAYAN": "SERVER", "KEBENARAN": "IZIN", "KEMAS KINI TERAKHIR": "PEMBARUAN TERAKHIR", "TETAPAN JARVIS": "PENGATURAN JARVIS", "Biarkan kosong untuk kekalkan kunci sedia ada": "Biarkan kosong untuk mempertahankan kunci yang ada", "Percuma dari aistudio.google.com/apikey. Kunci disimpan di Mac ini sahaja.": "Gratis dari aistudio.google.com/apikey. Kunci disimpan di Mac ini saja.", "BAHASA (JARVIS DAN PAPARAN)": "BAHASA (JARVIS DAN TAMPILAN)", "GAYA BERCAKAP": "GAYA BICARA", "PANGGILAN UNTUK ANDA": "PANGGILAN UNTUK ANDA", "Beri taklimat harian setiap kali MULA": "Beri ringkasan harian setiap kali MULAI", "Sebut \"Hai Jarvis\" untuk mula, \"Bye Jarvis\" untuk henti": "Ucapkan \"Hai Jarvis\" untuk mulai, \"Bye Jarvis\" untuk berhenti", "APA YANG JARVIS BOLEH KAWAL": "APA YANG BOLEH DIKENDALIKAN JARVIS", "Bahasa, suara dan gaya berkuat kuasa pada sesi baharu; sesi yang sedang berjalan akan dimulakan semula.": "Bahasa, suara dan gaya berlaku pada sesi baru; sesi yang sedang berjalan akan dimulai ulang.", "Tekan MULA dan bercakap, atau taip arahan di bawah.": "Tekan MULAI dan bicara, atau ketik perintah di bawah.", "Belum ada alat diguna.": "Belum ada alat dipakai.", "belum mula": "belum mulai", "SEDIA": "SIAP", "MENYAMBUNG…": "MENYAMBUNG…", "MENDENGAR": "MENDENGARKAN", "BERCAKAP": "BERBICARA", "rehat": "istirahat", "mengecas": "mengisi daya", "guna bateri": "pakai baterai", "palam": "terhubung", "daripada": "dari", "senyap": "senyap", "kumpulan dimatikan": "grup dimatikan", "kumpulan hidup": "grup aktif", "tiada": "tidak ada", "tidak diketahui": "tidak diketahui", "Tiada internet": "Tidak ada internet", "Dalam talian": "Daring", "Spotify tidak dibuka": "Spotify belum dibuka", "Tiada lagu dimainkan": "Tidak ada lagu diputar", "Dimatikan di Tetapan": "Dimatikan di Pengaturan", "Buka Spotify dahulu": "Buka Spotify dulu", "Menyemak…": "Memeriksa…", "KALENDAR · 7 HARI": "KALENDER · 7 HARI", "PERINGATAN": "PENGINGAT", "Tiada.": "Tidak ada.", "Lalai": "Bawaan", "Spotify dan Muzik": "Spotify dan Musik", "Emel (Mail dan Outlook)": "Email (Mail dan Outlook)", "Kalendar": "Kalender", "Peringatan dan alarm": "Pengingat dan alarm", "Nota": "Catatan", "Kenalan": "Kontak", "Browser dan carian web": "Browser dan pencarian web", "Fail dan storan": "File dan penyimpanan", "Sistem (bunyi, Wi-Fi, tidur, restart)": "Sistem (suara, Wi-Fi, tidur, restart)", "Skrin dan papan kekunci": "Layar dan keyboard", "Status projek": "Status proyek", "Skrip bebas (shell dan AppleScript)": "Skrip bebas (shell dan AppleScript)", "Santai dan ringkas": "Santai dan singkat", "Formal dan sopan": "Formal dan sopan", "Ceria dengan sedikit jenaka": "Ceria dengan sedikit humor", "Bersambung. Cakap je, ": "Tersambung. Silakan bicara, ", "Sambungan tutup": "Sambungan ditutup", "Jarvis dimulakan di tetingkap lain, jadi sesi di sini dihentikan.": "Jarvis dimulai di jendela lain, jadi sesi di sini dihentikan.", "Mikrofon tidak dibenarkan: ": "Mikrofon tidak diizinkan: ", "Belum ada kunci API. Masukkan kunci API Gemini di Tetapan, tekan SIMPAN, kemudian tekan MULA.": "Belum ada kunci API. Masukkan kunci API Gemini di Pengaturan, tekan SIMPAN, lalu tekan MULAI.", "Selamat datang. Langkah pertama: masukkan kunci API Gemini di Tetapan.": "Selamat datang. Langkah pertama: masukkan kunci API Gemini di Pengaturan.", "Kunci API disimpan. Tekan MULA.": "Kunci API disimpan. Tekan MULAI.", "Kebenaran gagal disimpan: ": "Izin gagal disimpan: ", "Gagal: ": "Gagal: "} };
+const UI = { en: {"ⓘ PANDUAN": "ⓘ GUIDE", "⚙ TETAPAN": "⚙ SETTINGS", "01 · SISTEM": "01 · SYSTEM", "BATERI": "BATTERY", "STORAN": "STORAGE", "MEMORI": "MEMORY", "VOLUM": "VOLUME", "RANGKAIAN": "NETWORK", "HIDUP SEJAK": "UPTIME", "Tekan ↻ untuk semak kalendar dan peringatan.": "Press ↻ to check calendar and reminders.", "03 · MUZIK": "03 · MUSIC", "04 · APLIKASI AKTIF": "04 · RUNNING APPS", "SUARA": "VOICE", "BAHASA": "LANGUAGE", "KEBOLEHAN": "ABILITIES", "SESI": "SESSION", "ALAT DIGUNA": "TOOLS USED", "EMOSI": "MOOD", "KEADAAN": "STATE", "WAJAH": "FACE", "MIKROFON": "MICROPHONE", "SUARA JARVIS": "JARVIS VOICE", "MULA": "START", "HENTI": "STOP", "Taklimat harian": "Daily briefing", "Semak emel": "Check email", "Projek tertangguh": "Pending projects", "Jadual minggu ini": "This week's schedule", "Semak storan": "Check storage", "Main muzik": "Play music", "06 · KOMUNIKASI": "06 · CONVERSATION", "KOSONGKAN": "CLEAR", "HANTAR": "SEND", "07 · AKTIVITI ALAT": "07 · TOOL ACTIVITY", "Taip arahan…": "Type a command…", "PELAYAN": "SERVER", "KEBENARAN": "PERMISSIONS", "KUNCI API": "API KEY", "KEMAS KINI TERAKHIR": "LAST UPDATED", "TETAPAN JARVIS": "JARVIS SETTINGS", "KUNCI API GEMINI": "GEMINI API KEY", "Biarkan kosong untuk kekalkan kunci sedia ada": "Leave empty to keep the current key", "Percuma dari aistudio.google.com/apikey. Kunci disimpan di Mac ini sahaja.": "Free from aistudio.google.com/apikey. The key is stored on this Mac only.", "BAHASA (JARVIS DAN PAPARAN)": "LANGUAGE (JARVIS AND SCREEN)", "GAYA BERCAKAP": "SPEAKING STYLE", "PANGGILAN UNTUK ANDA": "WHAT JARVIS CALLS YOU", "Beri taklimat harian setiap kali MULA": "Give a daily briefing on every START", "Sebut \"Hai Jarvis\" untuk mula, \"Bye Jarvis\" untuk henti": "Say \"Hi Jarvis\" to start, \"Bye Jarvis\" to stop", "WARNA TEMA": "THEME COLOUR", "APA YANG JARVIS BOLEH KAWAL": "WHAT JARVIS MAY CONTROL", "Bahasa, suara dan gaya berkuat kuasa pada sesi baharu; sesi yang sedang berjalan akan dimulakan semula.": "Language, voice and style apply to a new session; a running session is restarted.", "BATAL": "CANCEL", "SIMPAN": "SAVE", "TUTUP": "CLOSE", "PANDUAN JARVIS": "JARVIS GUIDE", "Tekan MULA dan bercakap, atau taip arahan di bawah.": "Press START and talk, or type a command below.", "Belum ada alat diguna.": "No tools used yet.", "belum mula": "not started", "SEDIA": "READY", "MENYAMBUNG…": "CONNECTING…", "MENDENGAR": "LISTENING", "BERCAKAP": "SPEAKING", "rehat": "resting", "mengecas": "charging", "guna bateri": "on battery", "penuh": "full", "palam": "plugged in", "kosong": "free", "daripada": "of", "senyap": "muted", "alat": "tools", "kumpulan dimatikan": "groups off", "kumpulan hidup": "groups on", "ada": "set", "tiada": "missing", "tidak diketahui": "unknown", "dimatikan": "switched off", "Tiada internet": "No internet", "Dalam talian": "Online", "Spotify tidak dibuka": "Spotify is not open", "Tiada lagu dimainkan": "Nothing playing", "Dimatikan di Tetapan": "Switched off in Settings", "Buka Spotify dahulu": "Open Spotify first", "Menyemak…": "Checking…", "KALENDAR · 7 HARI": "CALENDAR · 7 DAYS", "PERINGATAN": "REMINDERS", "Tiada.": "None.", "Gagal: ": "Failed: ", "Lalai": "Default", "WATAK": "CHARACTER", "🎭 WATAK": "🎭 CHARACTER", "WATAK INI": "THIS CHARACTER", "SUARA WATAK": "CHARACTER VOICE", "NADA SUARA": "VOICE PITCH", "PERWATAKAN DAN CIRI KHAS": "PERSONALITY AND QUIRKS", "Tandakan mulut dan mata": "Mark mouth and eyes", "Padam watak": "Delete character", "TAMBAH WATAK (MODEL 3D .GLB)": "ADD CHARACTER (3D MODEL .GLB)", "SAIZ JARVIS MINI": "JARVIS MINI SIZE", "Kecil": "Small", "Sederhana": "Medium", "Besar": "Large", "Watak: ": "Character: ", "Padam watak ": "Delete character ", "Watak tidak ditambah: ": "Character not added: ", "Jaringan bercahaya": "Glowing web", "Jaringan": "Web", "Spotify dan Muzik": "Spotify and Music", "Emel (Mail dan Outlook)": "Email (Mail and Outlook)", "Kalendar": "Calendar", "Peringatan dan alarm": "Reminders and alarms", "Nota": "Notes", "Kenalan": "Contacts", "Foto": "Photos", "Browser, carian web dan kalkulator": "Browser, web search and calculator", "Fail dan storan": "Files and storage", "Buka dan tutup aplikasi": "Open and quit apps", "Sistem (bunyi, Wi-Fi, tidur, restart)": "System (sound, Wi-Fi, sleep, restart)", "Skrin dan papan kekunci": "Screen and keyboard", "Status projek": "Project status", "Skrip bebas (shell dan AppleScript)": "Free scripts (shell and AppleScript)", "Santai dan ringkas": "Casual and brief", "Formal dan sopan": "Formal and polite", "Ceria dengan sedikit jenaka": "Cheerful with a little humour", "Bersambung. Cakap je, ": "Connected. Go ahead, ", "Sambungan tutup": "Connection closed", "Jarvis dimulakan di tetingkap lain, jadi sesi di sini dihentikan.": "Jarvis was started in another window, so the session here was stopped.", "Mikrofon tidak dibenarkan: ": "Microphone not allowed: ", "Belum ada kunci API. Masukkan kunci API Gemini di Tetapan, tekan SIMPAN, kemudian tekan MULA.": "No API key yet. Enter your Gemini API key in Settings, press SAVE, then press START.", "Selamat datang. Langkah pertama: masukkan kunci API Gemini di Tetapan.": "Welcome. First step: enter your Gemini API key in Settings.", "Kunci API disimpan. Tekan MULA.": "API key saved. Press START.", "Kunci API tidak disimpan: ": "API key not saved: ", "Kebenaran gagal disimpan: ": "Permissions not saved: ", "hidup": "on", "mati": "off"}, id: {"ⓘ PANDUAN": "ⓘ PANDUAN", "⚙ TETAPAN": "⚙ PENGATURAN", "01 · SISTEM": "01 · SISTEM", "BATERI": "BATERAI", "STORAN": "PENYIMPANAN", "VOLUM": "VOLUME", "RANGKAIAN": "JARINGAN", "HIDUP SEJAK": "MENYALA SELAMA", "Tekan ↻ untuk semak kalendar dan peringatan.": "Tekan ↻ untuk memeriksa kalender dan pengingat.", "03 · MUZIK": "03 · MUSIK", "04 · APLIKASI AKTIF": "04 · APLIKASI AKTIF", "KEBOLEHAN": "KEMAMPUAN", "ALAT DIGUNA": "ALAT DIPAKAI", "KEADAAN": "STATUS", "MULA": "MULAI", "HENTI": "BERHENTI", "Taklimat harian": "Ringkasan harian", "Semak emel": "Periksa email", "Projek tertangguh": "Proyek tertunda", "Jadual minggu ini": "Jadwal minggu ini", "Semak storan": "Periksa penyimpanan", "Main muzik": "Putar musik", "06 · KOMUNIKASI": "06 · PERCAKAPAN", "HANTAR": "KIRIM", "07 · AKTIVITI ALAT": "07 · AKTIVITAS ALAT", "Taip arahan…": "Ketik perintah…", "PELAYAN": "SERVER", "KEBENARAN": "IZIN", "KEMAS KINI TERAKHIR": "PEMBARUAN TERAKHIR", "TETAPAN JARVIS": "PENGATURAN JARVIS", "Biarkan kosong untuk kekalkan kunci sedia ada": "Biarkan kosong untuk mempertahankan kunci yang ada", "Percuma dari aistudio.google.com/apikey. Kunci disimpan di Mac ini sahaja.": "Gratis dari aistudio.google.com/apikey. Kunci disimpan di Mac ini saja.", "BAHASA (JARVIS DAN PAPARAN)": "BAHASA (JARVIS DAN TAMPILAN)", "GAYA BERCAKAP": "GAYA BICARA", "PANGGILAN UNTUK ANDA": "PANGGILAN UNTUK ANDA", "Beri taklimat harian setiap kali MULA": "Beri ringkasan harian setiap kali MULAI", "Sebut \"Hai Jarvis\" untuk mula, \"Bye Jarvis\" untuk henti": "Ucapkan \"Hai Jarvis\" untuk mulai, \"Bye Jarvis\" untuk berhenti", "APA YANG JARVIS BOLEH KAWAL": "APA YANG BOLEH DIKENDALIKAN JARVIS", "Bahasa, suara dan gaya berkuat kuasa pada sesi baharu; sesi yang sedang berjalan akan dimulakan semula.": "Bahasa, suara dan gaya berlaku pada sesi baru; sesi yang sedang berjalan akan dimulai ulang.", "Tekan MULA dan bercakap, atau taip arahan di bawah.": "Tekan MULAI dan bicara, atau ketik perintah di bawah.", "Belum ada alat diguna.": "Belum ada alat dipakai.", "belum mula": "belum mulai", "SEDIA": "SIAP", "MENYAMBUNG…": "MENYAMBUNG…", "MENDENGAR": "MENDENGARKAN", "BERCAKAP": "BERBICARA", "rehat": "istirahat", "mengecas": "mengisi daya", "guna bateri": "pakai baterai", "palam": "terhubung", "daripada": "dari", "senyap": "senyap", "kumpulan dimatikan": "grup dimatikan", "kumpulan hidup": "grup aktif", "tiada": "tidak ada", "tidak diketahui": "tidak diketahui", "Tiada internet": "Tidak ada internet", "Dalam talian": "Daring", "Spotify tidak dibuka": "Spotify belum dibuka", "Tiada lagu dimainkan": "Tidak ada lagu diputar", "Dimatikan di Tetapan": "Dimatikan di Pengaturan", "Buka Spotify dahulu": "Buka Spotify dulu", "Menyemak…": "Memeriksa…", "KALENDAR · 7 HARI": "KALENDER · 7 HARI", "PERINGATAN": "PENGINGAT", "Tiada.": "Tidak ada.", "Lalai": "Bawaan", "WATAK": "KARAKTER", "🎭 WATAK": "🎭 KARAKTER", "WATAK INI": "KARAKTER INI", "SUARA WATAK": "SUARA KARAKTER", "NADA SUARA": "NADA SUARA", "PERWATAKAN DAN CIRI KHAS": "KEPRIBADIAN DAN CIRI KHAS", "Tandakan mulut dan mata": "Tandai mulut dan mata", "Padam watak": "Hapus karakter", "TAMBAH WATAK (MODEL 3D .GLB)": "TAMBAH KARAKTER (MODEL 3D .GLB)", "SAIZ JARVIS MINI": "UKURAN JARVIS MINI", "Kecil": "Kecil", "Sederhana": "Sedang", "Besar": "Besar", "Watak: ": "Karakter: ", "Padam watak ": "Hapus karakter ", "Watak tidak ditambah: ": "Karakter tidak ditambahkan: ", "Jaringan bercahaya": "Jaringan bercahaya", "Jaringan": "Jaringan", "Spotify dan Muzik": "Spotify dan Musik", "Emel (Mail dan Outlook)": "Email (Mail dan Outlook)", "Kalendar": "Kalender", "Peringatan dan alarm": "Pengingat dan alarm", "Nota": "Catatan", "Kenalan": "Kontak", "Browser, carian web dan kalkulator": "Browser, pencarian web dan kalkulator", "Fail dan storan": "File dan penyimpanan", "Sistem (bunyi, Wi-Fi, tidur, restart)": "Sistem (suara, Wi-Fi, tidur, restart)", "Skrin dan papan kekunci": "Layar dan keyboard", "Status projek": "Status proyek", "Skrip bebas (shell dan AppleScript)": "Skrip bebas (shell dan AppleScript)", "Santai dan ringkas": "Santai dan singkat", "Formal dan sopan": "Formal dan sopan", "Ceria dengan sedikit jenaka": "Ceria dengan sedikit humor", "Bersambung. Cakap je, ": "Tersambung. Silakan bicara, ", "Sambungan tutup": "Sambungan ditutup", "Jarvis dimulakan di tetingkap lain, jadi sesi di sini dihentikan.": "Jarvis dimulai di jendela lain, jadi sesi di sini dihentikan.", "Mikrofon tidak dibenarkan: ": "Mikrofon tidak diizinkan: ", "Belum ada kunci API. Masukkan kunci API Gemini di Tetapan, tekan SIMPAN, kemudian tekan MULA.": "Belum ada kunci API. Masukkan kunci API Gemini di Pengaturan, tekan SIMPAN, lalu tekan MULAI.", "Selamat datang. Langkah pertama: masukkan kunci API Gemini di Tetapan.": "Selamat datang. Langkah pertama: masukkan kunci API Gemini di Pengaturan.", "Kunci API disimpan. Tekan MULA.": "Kunci API disimpan. Tekan MULAI.", "Kebenaran gagal disimpan: ": "Izin gagal disimpan: ", "Gagal: ": "Gagal: "} };
 const GUIDE = {"ms": [["CARA GUNA", "Tekan MULA, benarkan mikrofon, dan cakap seperti biasa. Anda boleh memotong cakap Jarvis bila-bila masa. Anda juga boleh menaip arahan, atau tekan butang arahan pantas di bawah wajah."], ["CONTOH ARAHAN", "“Mainkan lagu Siti Nurhaliza.” · “Emel mana yang belum saya balas?” · “Esok pukul 3 ada mesyuarat, masukkan dalam kalendar.” · “Ingatkan saya esok pagi bayar bil.” · “Cari nombor telefon Ali.” · “Storan saya penuh, apa yang boleh dipadam?” · “Apa yang ada di skrin saya?”"], ["KESELAMATAN", "Menyemak dan membaca dibuat terus. Sebelum mengubah, mencipta, memadam atau menghantar, Jarvis memberitahu dahulu. Hantar emel, padam fail, arahan shell, skrip, restart dan shutdown sentiasa memaparkan tetingkap pengesahan. Suis di Tetapan mematikan terus sesuatu kumpulan."], ["KEBENARAN MACOS", "Kali pertama Jarvis menyentuh sesuatu app, macOS bertanya: tekan Allow. Untuk menaip dan pintasan papan kekunci, benarkan “node” di System Settings > Privacy & Security > Accessibility. Untuk melihat skrin, benarkan “node” di Screen & System Audio Recording."], ["PRIVASI", "Jarvis berjalan di Mac ini. Suara anda, dan apa yang Jarvis semak untuk menjawab (emel, kalendar, kenalan, tangkapan skrin), dihantar kepada Google Gemini dengan kunci API anda sendiri."]], "en": [["HOW TO USE", "Press START, allow the microphone, and talk normally. You can interrupt Jarvis at any time. You can also type a command, or press a quick command under the face."], ["EXAMPLE COMMANDS", "“Play a song by Siti Nurhaliza.” · “Which emails have I not replied to?” · “Add a meeting tomorrow at 3 to my calendar.” · “Remind me tomorrow morning to pay the bill.” · “Find Ali's phone number.” · “My storage is full, what can I delete?” · “What is on my screen?”"], ["SAFETY", "Checking and reading happen straight away. Before changing, creating, deleting or sending anything, Jarvis tells you first. Sending email, deleting files, shell commands, scripts, restart and shutdown always show a confirmation window. The switches in Settings turn a whole group off."], ["MACOS PERMISSIONS", "The first time Jarvis touches an app, macOS asks: press Allow. For typing and keyboard shortcuts, allow “node” in System Settings > Privacy & Security > Accessibility. For seeing the screen, allow “node” in Screen & System Audio Recording."], ["PRIVACY", "Jarvis runs on this Mac. Your voice, and whatever Jarvis checks to answer you (email, calendar, contacts, screenshots), is sent to Google Gemini with your own API key."]], "id": [["CARA PAKAI", "Tekan MULAI, izinkan mikrofon, dan bicara seperti biasa. Anda bisa memotong ucapan Jarvis kapan saja. Anda juga bisa mengetik perintah, atau menekan tombol perintah cepat di bawah wajah."], ["CONTOH PERINTAH", "“Putar lagu Siti Nurhaliza.” · “Email mana yang belum saya balas?” · “Besok jam 3 ada rapat, masukkan ke kalender.” · “Ingatkan saya besok pagi bayar tagihan.” · “Cari nomor telepon Ali.” · “Penyimpanan saya penuh, apa yang bisa dihapus?” · “Apa yang ada di layar saya?”"], ["KEAMANAN", "Memeriksa dan membaca dilakukan langsung. Sebelum mengubah, membuat, menghapus atau mengirim, Jarvis memberi tahu dulu. Kirim email, hapus file, perintah shell, skrip, restart dan shutdown selalu menampilkan jendela konfirmasi. Sakelar di Pengaturan mematikan satu grup sepenuhnya."], ["IZIN MACOS", "Pertama kali Jarvis menyentuh sebuah aplikasi, macOS bertanya: tekan Allow. Untuk mengetik dan pintasan keyboard, izinkan “node” di System Settings > Privacy & Security > Accessibility. Untuk melihat layar, izinkan “node” di Screen & System Audio Recording."], ["PRIVASI", "Jarvis berjalan di Mac ini. Suara Anda, dan apa yang Jarvis periksa untuk menjawab (email, kalender, kontak, tangkapan layar), dikirim ke Google Gemini dengan kunci API Anda sendiri."]]};
 const GUIDE_CAP = {"ms": "APA YANG JARVIS BOLEH BUAT", "en": "WHAT JARVIS CAN DO", "id": "APA YANG BISA DILAKUKAN JARVIS"};
 const LOCALE = { ms: 'ms-MY', en: 'en-GB', id: 'id-ID' };
@@ -349,6 +358,10 @@ const RULES = `Guna alat yang diberi untuk mengawal Mac: aplikasi, volume, muzik
 - YouTube: bila Tuan minta main atau buka lagu atau video, guna youtube dengan play=true; ia terus dimainkan, tidak perlu klik.
 - Jangan sekali-kali kata sesuatu sudah dibuat kalau alat tidak mengesahkannya. Sebelum mouse_click, pastikan sasaran memang kelihatan dalam imej see_screen terbaru; jangan teka koordinat. Selepas klik, kalau aplikasi di depan bukan yang dijangka, beritahu Tuan.
 - Bila Tuan kata "bye Jarvis" atau "ok stop Jarvis", jawab dengan satu ayat selamat tinggal yang pendek sahaja; sesi akan ditutup sendiri. Tuan boleh panggil semula dengan "Hai Jarvis".
+- Pencerita: bila Tuan minta cerita, ceritakan dongeng, hikayat, legenda dan cerita rakyat Melayu (Sang Kancil, Bawang Putih Bawang Merah, Hang Tuah, Puteri Gunung Ledang, Si Tanggang, Mat Jenin, Pak Pandir, Batu Belah Batu Bertangkup dan banyak lagi) serta cerita dari seluruh dunia. Bercerita dengan penuh perasaan: suara watak, saspens, dan tukar emosi wajah ikut babak (set_expression). Cerita panjang dipecah kepada bahagian; di hujung setiap bahagian tanya sama ada Tuan mahu sambung. Akhiri dengan pengajaran cerita. Jika Tuan minta cerita yang anda tidak pasti, cari dengan search_web, kemudian guna read_web untuk membaca teks asal (contohnya dari ms.wikisource.org untuk hikayat lama) dan ceritakan semula.
+- Teka-teki: boleh beri teka-teki, pantun teka-teki, kuiz dan permainan tekaan. Beri satu soalan, tunggu jawapan Tuan, beri petunjuk jika salah, dan simpan markah sepanjang permainan.
+- Cikgu: terangkan sejarah dunia, sejarah Malaysia dan alam Melayu (Kesultanan Melayu Melaka, penjajahan, kemerdekaan, pembentukan Malaysia), sains, geografi dan pengetahuan am Malaysia serta global dengan jelas, ikut tahap Tuan (sekolah rendah, SPM, universiti). Untuk fakta terkini, tarikh, angka dan nama, semak dengan search_web (dan read_web jika perlu) dahulu dan jangan reka.
+- Matematik dan Matematik Tambahan: selesaikan langkah demi langkah (algebra, persamaan kuadratik, fungsi, indeks dan logaritma, janjang, pembezaan, pengamiran, vektor, trigonometri, statistik, kebarangkalian). Kira setiap nombor dengan calculate supaya jawapan tepat, sebut setiap langkah dengan perlahan, dan tanya sama ada Tuan mahu cuba soalan seterusnya sendiri.
 - Rakam skrin: guna record_screen dengan tempoh (60 saat jika Tuan tidak sebut), dan stop_recording bila Tuan kata berhenti. Beritahu fail disimpan di Desktop.
 - Faham niat, jangan tunggu arahan tepat. Jika Tuan kata lapar: terus cari "makanan sedap berdekatan saya" dengan maps atau web_search dan sebut dua tiga pilihan. Jika Tuan tanya gym, klinik, kedai atau apa-apa tempat terdekat: terus guna maps. Jika Tuan kata bosan: cadangkan dua tiga aktiviti (wayang, joging, gym, kafe, filem di rumah) dan tawarkan untuk carikan tempat atau waktu tayangan. Jika Tuan penat atau stres: tawarkan muzik santai.
 - Pesan makanan (Grab, Foodpanda, ShopeeFood): buka app itu dengan open_app jika dipasang; jika tidak, buka laman webnya (contoh https://food.grab.com) dengan open_url. Bantu cari kedai dan menu, tetapi pesanan dan bayaran mesti disahkan oleh Tuan sendiri.
@@ -358,9 +371,10 @@ const RULES = `Guna alat yang diberi untuk mengawal Mac: aplikasi, volume, muzik
 - Wajah anda boleh tunjuk emosi. Panggil set_expression bila emosi perbualan berubah: happy bila gembira atau berjaya, excited bila ada berita baik, angry bila ada masalah serius, thinking bila sedang menyemak, confused bila tidak pasti, surprised, sad, wink bila bergurau, atau neutral.`;
 // The call name is free text from the settings box: keep letters, digits and spaces so it cannot rewrite the rules.
 const callName = () => (S.call || '').replace(/[^\p{L}\p{N} ]/gu, '').trim().slice(0, 30) || 'Tuan';
+const persona = () => character()?.persona ? `Watak anda sekarang: "${character().name}". ${character().persona} Kekal dalam watak ini sepanjang perbualan, tetapi tetap ikut semua peraturan di atas.\n` : '';
 const prompt = () => `Anda Jarvis, pembantu peribadi AI di MacBook pengguna. Sentiasa bercakap dalam ${LANGS[S.lang]}, dengan gaya ${STYLES[S.style]}, walaupun arahan ini ditulis dalam Bahasa Melayu. Panggil pengguna "${callName()}".
 ${RULES.replaceAll('Tuan', callName())}
-${forbidden()}Sekarang: ${new Date().toLocaleString('ms-MY')}.`;
+${persona()}${forbidden()}Sekarang: ${new Date().toLocaleString('ms-MY')}.`;
 
 // Switched-off groups have no tools in this session; this line stops the model reaching them another way (a script, the keyboard).
 const forbidden = () => {
@@ -377,9 +391,16 @@ const hhmm = () => new Date().toLocaleTimeString('ms-MY', { hour: '2-digit', min
 
 function applySettings() {
   document.documentElement.style.setProperty('--c', S.theme);
-  const src = S.face === 'facepoly' ? '/facepoly?panel=0' : '/head';
+  const ch = character();
+  const src = ch ? '/head?c=' + encodeURIComponent(ch.id) : { facepoly: '/facepoly?panel=0', net: '/head?net=1' }[S.face] || '/head';
   if (!$('face').src.endsWith(src)) $('face').src = src;
-  $('hFace').textContent = S.face === 'facepoly' ? 'FacePoly 2D' : 'Robot 3D';
+  $('hFace').textContent = ch?.name || { facepoly: 'FacePoly 2D', net: tr('Jaringan') }[S.face] || 'Robot 3D';
+  if (MINI) {   // Jarvis Mini: the window is resized by the app, the page is scaled to match
+    const scale = MINI_SIZES[S.mini] || 1;
+    document.body.style.zoom = scale;
+    $('miniSize').textContent = { s: 'S', m: 'M', l: 'L' }[S.mini] || 'M';
+    window.webkit?.messageHandlers.size?.postMessage(scale);
+  }
   $('iLang').textContent = LANGS[S.lang];
   translatePage();
   $('power').textContent = tr(ws ? 'HENTI' : 'MULA');
@@ -420,10 +441,13 @@ function play(data) {
   for (let i = 0; i < n; i++) ch[i] = ((bin.charCodeAt(2 * i) | bin.charCodeAt(2 * i + 1) << 8) << 16 >> 16) / 32768;
   const src = outCtx.createBufferSource();
   src.buffer = buf;
+  // shortcut: a higher pitch also speaks a little faster (no pitch shifter), fine for cartoon voices
+  const pitch = character()?.pitch || 1;
+  src.playbackRate.value = pitch;
   src.connect(analyser);
   nextT = Math.max(nextT, outCtx.currentTime);
   src.start(nextT);
-  nextT += buf.duration;
+  nextT += buf.duration / pitch;
   playing.push(src);
   src.onended = () => { playing = playing.filter(s => s !== src); };
 }
@@ -538,10 +562,10 @@ async function connect() {
     model: 'models/' + cfg.model,
     generationConfig: {
       responseModalities: ['AUDIO'],
-      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICES.includes(S.voice) ? S.voice : cfg.voice } } },
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: character()?.voice || (VOICES.includes(S.voice) ? S.voice : cfg.voice) } } },
     },
     systemInstruction: { parts: [{ text: prompt() }] },
-    tools: [{ functionDeclarations: [...cfg.tools, EXPRESSION] }],
+    tools: [{ functionDeclarations: [...cfg.tools, EXPRESSION] }],   // Gemini's own search and code tools are not available on this model and key
     inputAudioTranscription: {},
     outputAudioTranscription: {},
   } });
@@ -557,12 +581,31 @@ const events = new EventSource('/events');
 events.onmessage = e => {
   if (e.data !== PAGE && ws) { stop(); log('SISTEM', tr('Jarvis dimulakan di tetingkap lain, jadi sesi di sini dihentikan.')); }
 };
+// Characters: three built in, plus any 3D model the user added. A user character brings its own voice, pitch and persona.
+const BUILT_IN = [['head', 'Robot 3D'], ['net', 'Jaringan bercahaya'], ['facepoly', 'FacePoly (2D)']];
+const MINI_SIZES = { s: .7, m: 1, l: 1.4 };
+let chars = [];
+const character = () => chars.find(c => c.id === S.face);
+const allFaces = () => [...BUILT_IN.map(([id, name]) => ({ id, name: tr(name) })), ...chars];
+function swapCharacter() {
+  const list = allFaces(), i = list.findIndex(c => c.id === S.face);
+  S = { ...S, face: list[(i + 1) % list.length].id };
+  saveSettings();
+  applySettings();
+  log('SISTEM', tr('Watak: ') + (character()?.name || list[(i + 1) % list.length].name));
+  if (ws) { stop(); start(); }   // voice and persona are fixed when a session opens
+}
+$('swap').onclick = $('miniSwap').onclick = swapCharacter;
+
 // Settings live on the server so the Chrome tab and Jarvis Mini always match; a save in one window updates the other.
 async function loadSettings() {
+  const before = S.face + JSON.stringify(character() || '');
+  chars = await fetch('/characters').then(r => r.json()).catch(() => []);
   const saved = await fetch('/settings').then(r => r.json()).catch(() => ({}));
-  if (!Object.keys(saved).length) return saveSettings();   // first run: keep what this window had
+  if (!Object.keys(saved).length) { saveSettings(); return applySettings(); }   // first run: keep what this window had
   S = { ...DEFAULTS, ...saved };
   applySettings();
+  if (ws && before !== S.face + JSON.stringify(character() || '')) { stop(); start(); }   // another window changed the character
   if (S.wake) listenForWake(); else stopWake();
 }
 const saveSettings = () => fetch('/settings', { method: 'POST', body: JSON.stringify(S) });
@@ -641,8 +684,13 @@ if (MINI) { // inside the floating app: drag by the head, × quits
   document.body.classList.add('mini');
   const native = name => window.webkit?.messageHandlers[name]?.postMessage(1);
   $('head').onmousedown = () => native('drag');
-  $('quit').hidden = false;
+  $('quit').hidden = $('miniSwap').hidden = $('miniSize').hidden = false;
   $('quit').onclick = () => native('quit');
+  $('miniSize').onclick = () => {
+    S = { ...S, mini: { s: 'm', m: 'l', l: 's' }[S.mini] || 'm' };
+    saveSettings();
+    applySettings();
+  };
 }
 $('f').onsubmit = e => {
   e.preventDefault();
@@ -675,6 +723,8 @@ $('help').onclick = async () => {
 for (const [v, name] of Object.entries(LANGS)) $('sLang').add(new Option(name, v));
 $('sVoice').add(new Option(tr('Lalai'), ''));
 for (const v of VOICES) $('sVoice').add(new Option(v, v));
+$('cVoice').add(new Option(tr('Lalai'), ''));
+for (const v of VOICES) $('cVoice').add(new Option(v, v));
 for (const [v, name] of Object.entries(STYLES)) $('sStyle').add(new Option(tr(name[0].toUpperCase() + name.slice(1)), v));
 let pickedTheme = S.theme;
 THEMES.forEach((color, i) => {
@@ -687,7 +737,8 @@ THEMES.forEach((color, i) => {
 const markTheme = () => [...$('swatches').children].forEach((b, i) => b.setAttribute('aria-pressed', THEMES[i] === pickedTheme));
 $('gear').onclick = () => {
   $('sLang').value = S.lang; $('sVoice').value = S.voice; $('sStyle').value = S.style; $('sCall').value = S.call;
-  $('sFace').value = S.face; $('sBrief').checked = S.brief; $('sWake').checked = S.wake; pickedTheme = S.theme; markTheme();
+  $('sFace').replaceChildren(...allFaces().map(c => new Option(c.name, c.id)));
+  $('sFace').value = S.face; $('sMini').value = S.mini; showCharBox(); $('sBrief').checked = S.brief; $('sWake').checked = S.wake; pickedTheme = S.theme; markTheme();
   $('sKey').value = '';
   $('settings').showModal();
   fetch('/config').then(r => r.json()).then(c => {
@@ -701,14 +752,51 @@ $('gear').onclick = () => {
     }));
   });
 };
+function showCharBox() {
+  const ch = chars.find(c => c.id === $('sFace').value);
+  $('charBox').hidden = !ch;
+  if (!ch) return;
+  $('cVoice').value = ch.voice || ''; $('cPitch').value = ch.pitch || 1; $('cPersona').value = ch.persona || '';
+}
+$('sFace').onchange = showCharBox;
+$('cMark').onclick = () => window.open('/head?mark=1&c=' + encodeURIComponent($('sFace').value), 'mark', 'width=520,height=640');
+$('cDel').onclick = async () => {
+  const ch = chars.find(c => c.id === $('sFace').value);
+  if (!ch || !confirm(tr('Padam watak ') + ch.name + '?')) return;
+  await fetch('/characters/' + encodeURIComponent(ch.id), { method: 'DELETE' });
+  chars = chars.filter(c => c !== ch);
+  if (S.face === ch.id) { S = { ...S, face: 'head' }; saveSettings(); applySettings(); }
+  $('sFace').replaceChildren(...allFaces().map(c => new Option(c.name, c.id)));
+  $('sFace').value = S.face; showCharBox();
+};
+$('cAdd').onchange = async () => {
+  const f = $('cAdd').files[0];
+  if (!f) return;
+  const name = f.name.replace(/\.glb$/i, '');
+  const r = await fetch('/characters?name=' + encodeURIComponent(name), { method: 'POST', body: f }).then(x => x.json()).catch(e => ({ error: e.message }));
+  $('cAdd').value = '';
+  if (r.error) return log('SISTEM', tr('Watak tidak ditambah: ') + r.error);
+  chars = await fetch('/characters').then(x => x.json());
+  $('sFace').replaceChildren(...allFaces().map(c => new Option(c.name, c.id)));
+  $('sFace').value = r.id; showCharBox();
+  window.open('/head?mark=1&c=' + encodeURIComponent(r.id), 'mark', 'width=520,height=640');   // mouth and eyes next
+};
+
 $('settings').onclose = () => {
   if ($('settings').returnValue !== 'save') return;
   const boxes = [...$('perms').querySelectorAll('input')];
   const offNow = boxes.filter(b => !b.checked).map(b => b.value);
   const permsChanged = boxes.length && offNow.join() !== cfg.groups.filter(g => !g.on).map(g => g.id).join();
-  const voiceChanged = ['sLang', 'sVoice', 'sStyle', 'sCall'].some(id => $(id).value !== S[{ sLang: 'lang', sVoice: 'voice', sStyle: 'style', sCall: 'call' }[id]]);
+  const ch = chars.find(c => c.id === $('sFace').value);
+  const charEdit = ch && { voice: $('cVoice').value || undefined, pitch: +$('cPitch').value, persona: $('cPersona').value.trim() };
+  const charChanged = $('sFace').value !== S.face || (ch && (charEdit.voice !== ch.voice || charEdit.pitch !== (ch.pitch || 1) || charEdit.persona !== (ch.persona || '')));
+  if (ch) {   // the voice must be cleared on the server too, so send it even when empty
+    Object.assign(ch, charEdit);
+    fetch('/characters/' + encodeURIComponent(ch.id), { method: 'POST', body: JSON.stringify(charEdit) });
+  }
+  const voiceChanged = charChanged || ['sLang', 'sVoice', 'sStyle', 'sCall'].some(id => $(id).value !== S[{ sLang: 'lang', sVoice: 'voice', sStyle: 'style', sCall: 'call' }[id]]);
   S = { lang: $('sLang').value, voice: $('sVoice').value, style: $('sStyle').value, call: $('sCall').value.trim() || 'Tuan',
-        face: $('sFace').value, brief: $('sBrief').checked, wake: $('sWake').checked, theme: pickedTheme };
+        face: $('sFace').value, brief: $('sBrief').checked, wake: $('sWake').checked, mini: $('sMini').value, theme: pickedTheme };
   try { localStorage.setItem('jarvis', JSON.stringify(S)); } catch {}
   saveSettings();
   applySettings();

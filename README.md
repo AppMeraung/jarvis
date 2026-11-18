@@ -32,6 +32,9 @@ Jarvis terbuka sendiri. Kemudian:
 - **Bahasa**: Jarvis bercakap Melayu, English, Indonesia, Mandarin, Tamil atau Arab. Paparan dalam Melayu, English atau Indonesia.
 - **Jarvis Mini**: kepala kecil yang terapung di tepi skrin. Buka dari folder Applications anda selepas pemasangan.
 - **Tanpa tangan**: sebut **"Hai Jarvis"** untuk mula, **"Bye Jarvis"** atau **"Ok stop Jarvis"** untuk henti. Boleh dimatikan di Tetapan. Semasa menunggu, pengecaman suara pelayar (Google dalam Chrome, Apple dalam Jarvis Mini) mendengar mikrofon.
+- **Watak**: tukar wajah Jarvis dengan butang **🎭 WATAK**: Robot 3D, Jaringan bercahaya, FacePoly, atau model 3D anda sendiri (.glb). Setiap watak ada suara, nada dan perwatakan sendiri, dan mulut, mata serta badannya bergerak ikut emosi dan perkataan. Tambah watak di Tetapan, kemudian klik mulut dan mata watak sekali. Guna hanya model yang anda berhak guna.
+- **Bercerita dan belajar**: dongeng, hikayat dan cerita rakyat Melayu, teka-teki dan kuiz, sejarah Malaysia dan dunia, sains, pengetahuan am, Matematik dan Matematik Tambahan langkah demi langkah dengan kalkulator tepat. Jarvis boleh mencari dan membaca Wikipedia Melayu, Wikipedia Inggeris dan Wikisource Melayu.
+- **Saiz Jarvis Mini**: Kecil, Sederhana atau Besar (butang di Mini atau di Tetapan).
 - **Tetapan dikongsi**: Chrome dan Jarvis Mini guna tetapan yang sama dan dikemas kini serentak.
 - **Taklimat harian**: jadual minggu ini, peringatan dan kerja tertangguh setiap kali anda tekan MULA.
 

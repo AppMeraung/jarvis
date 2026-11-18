@@ -22,6 +22,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
     config.mediaTypesRequiringUserActionForPlayback = []
     config.userContentController.add(self, name: "drag")
     config.userContentController.add(self, name: "quit")
+    config.userContentController.add(self, name: "size")
     let web = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: config)
     web.setValue(false, forKey: "drawsBackground") // lets the desktop show through
     web.uiDelegate = self
@@ -34,6 +35,12 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
   func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
     if message.name == "quit" { NSApp.terminate(nil) }
     if message.name == "drag", let event = NSApp.currentEvent { panel.performDrag(with: event) }
+    // Small, medium or large: the page sends a scale; the window keeps its bottom-right corner where it was.
+    if message.name == "size", let scale = message.body as? Double, scale >= 0.5, scale <= 2 {
+      let old = panel.frame, size = NSSize(width: 230 * scale, height: 400 * scale)
+      panel.setFrame(NSRect(x: old.maxX - size.width, y: old.minY, width: size.width, height: size.height), display: true)
+      panel.contentView?.frame = NSRect(origin: .zero, size: size)
+    }
   }
 
   // Microphone: only the local Jarvis page may use it. macOS still asks the user once for the app itself.

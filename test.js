@@ -17,7 +17,7 @@ const SAMPLES = {
   calendar_events: { days: 3 }, calendar_add: { title: 'Mesyuarat', start: '2026-11-20T15:30', minutes: 60 },
   reminder_add: { title: 'Beli susu', due: '2026-11-20T09:00' }, reminders_list: {},
   note_add: { title: 'Idea', body: 'Isi' }, notes_search: { query: 'Idea' },
-  open_url: { url: 'https://example.com/a' }, web_search: { query: 'nasi lemak & teh' },
+  open_url: { url: 'https://example.com/a' }, read_web: { url: 'https://ms.wikisource.org/wiki/Hikayat_Hang_Tuah' }, search_web: { query: 'hikayat sang kancil' }, calculate: { expression: '(2+3)^2' }, web_search: { query: 'nasi lemak & teh' },
   youtube: { query: 'lagu raya' }, maps: { query: 'KLCC' }, browser_tab: {}, close_tab: {},
   open_folder: { name: 'Downloads' }, find_files: { query: 'laporan' },
   open_file: { path: path.join(HOME, 'Documents', 'laporan.pdf') },
@@ -318,4 +318,47 @@ test('a settings save in one window reaches every other window', async () => {
     server.kill();
     fs.rmSync(dir, { recursive: true });
   }
+});
+
+test('character data keeps only safe, bounded values', () => {
+  const { cleanCharacter } = require('./tools');
+  assert.deepStrictEqual(cleanCharacter({ name: ' Mimi ', voice: 'Puck', pitch: 1.3, persona: 'ceria', mouth: [0, 1, .5], eyes: [[0, 1.4, .5], 'x', [1, 2]], size: .1 }),
+    { name: 'Mimi', voice: 'Puck', pitch: 1.3, persona: 'ceria', mouth: [0, 1, .5], eyes: [[0, 1.4, .5]], size: .1 });
+  assert.deepStrictEqual(cleanCharacter({ pitch: 9, voice: 'Bob', mouth: [0, 'a', 1], size: -1, name: '   ' }), { pitch: 1.6 });
+  assert.strictEqual(cleanCharacter({ name: 'x'.repeat(50) }).name.length, 30);
+  for (const bad of [null, 'teks', 42]) assert.deepStrictEqual(cleanCharacter(bad), {});
+});
+
+test('characters can be added, edited, listed, served and removed, and bad ids are refused', async () => {
+  const PORT = 4300 + Math.floor(Math.random() * 500);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-'));
+  for (const f of ['server.js', 'tools.js']) fs.copyFileSync(path.join(__dirname, f), path.join(dir, f));
+  const server = require('node:child_process').spawn(process.execPath, ['server.js'], { cwd: dir, env: { ...process.env, PORT } });
+  const url = p => `http://localhost:${PORT}${p}`;
+  try {
+    await new Promise(done => server.stdout.once('data', done));
+    assert.strictEqual((await fetch(url('/characters?name=x'), { method: 'POST', body: 'bukan glb' })).status, 400);
+    const glb = Buffer.concat([Buffer.from('glTF'), Buffer.alloc(16)]);
+    const { id } = await fetch(url('/characters?name=Kucing%20Biru'), { method: 'POST', body: glb }).then(r => r.json());
+    assert.match(id, /^kucing-biru-[a-z0-9]{4}$/);
+    assert.strictEqual((await fetch(url('/characters/' + id), { method: 'POST', body: JSON.stringify({ voice: 'Puck', pitch: 1.2, evil: 1 }) })).status, 200);
+    assert.deepStrictEqual(await fetch(url('/characters')).then(r => r.json()), [{ id, name: 'Kucing Biru', voice: 'Puck', pitch: 1.2 }]);
+    assert.deepStrictEqual(Buffer.from(await fetch(url(`/characters/${id}/model.glb`)).then(r => r.arrayBuffer())), glb);
+    assert.strictEqual((await fetch(url('/characters/..%2Fserver.js/model.glb'))).status, 404);
+    assert.strictEqual((await fetch(url('/characters/' + id), { method: 'DELETE' })).status, 200);
+    assert.deepStrictEqual(await fetch(url('/characters')).then(r => r.json()), []);
+  } finally {
+    server.kill();
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
+test('calculate works out maths exactly and refuses anything that is not maths', () => {
+  const run = expression => { const [file, argv] = plan('calculate', { expression }); return execFileSync(file, argv, { encoding: 'utf8' }).trim(); };
+  assert.strictEqual(run('(2*3+sqrt(16))^2/5'), '20');
+  assert.strictEqual(run('sin(rad(30))'), '0.5');
+  assert.strictEqual(run('log(1000) + ln(e)'), '4');
+  assert.strictEqual(run('7 × 8 ÷ 2'), '28');
+  assert.match(run('sqrt(-1)'), /Tiada jawapan nyata/);
+  for (const bad of ['process.exit()', 'require("fs")', 'constructor', '1;alert(1)', 'x=1', '`a`', 'M']) assert.throws(() => plan('calculate', { expression: bad }), bad);
 });

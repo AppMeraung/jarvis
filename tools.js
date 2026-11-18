@@ -112,6 +112,32 @@ if [ ! -d "/Applications/Google Chrome.app" ]; then open "$u" && echo "Dibuka da
 elif pgrep -xq "Google Chrome"; then osascript -e "$3" -- "$u" "$2"
 else open -a "Google Chrome" "$u" && echo "Chrome dibuka dengan halaman itu"; fi`, 'jarvis', url, site, REUSE_TAB, play]];
 
+// Background search in Wikipedia (Malay and English) and Malay Wikisource (old hikayat texts), without the browser.
+// These are free, stable and openly licensed; general web search engines block automated requests. argv: query.
+const SEARCH = `(async () => {
+  const q = process.argv[1];
+  const sites = ['ms.wikipedia.org', 'en.wikipedia.org', 'ms.wikisource.org'];
+  const found = await Promise.all(sites.map(site => fetch('https://' + site + '/w/api.php?action=query&list=search&format=json&srlimit=4&srsearch=' + encodeURIComponent(q),
+    { headers: { 'user-agent': 'JarvisMac/1.0' }, signal: AbortSignal.timeout(15000) }).then(r => r.json())
+    .then(j => j.query.search.map(h => h.title + '\\n' + 'https://' + site + '/wiki/' + encodeURIComponent(h.title.replace(/ /g, '_')) + '\\n' + h.snippet.replace(/<[^>]+>/g, '').replace(/&quot;/g, '"')))
+    .catch(() => [])));
+  console.log(found.flat().join('\\n\\n') || 'Tiada hasil.');
+})()`;
+
+// Exact arithmetic for maths questions. Only numbers, operators, brackets and known maths words get through.
+const CALC_WORDS = ['sqrt', 'cbrt', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'log', 'ln', 'log10', 'log2', 'exp', 'abs', 'pi', 'e', 'floor', 'ceil', 'round', 'deg', 'rad'];
+function mathExpr(v) {
+  const x = text(v, 300).replace(/×/g, '*').replace(/÷/g, '/').replace(/\^/g, '**');
+  if (!/^[\d\s+\-*/().,%]*$/.test(x.replace(/[a-z0-9]+/gi, w => CALC_WORDS.includes(w.toLowerCase()) || /^\d/.test(w) ? '0' : 'X'))) bad('Ungkapan hanya boleh ada nombor, + - * / ^ ( ) dan fungsi seperti sqrt, sin, log.');
+  return x;
+}
+const CALC = `const M = { sqrt: Math.sqrt, cbrt: Math.cbrt, sin: Math.sin, cos: Math.cos, tan: Math.tan, asin: Math.asin, acos: Math.acos,
+  atan: Math.atan, log: Math.log10, ln: Math.log, log10: Math.log10, log2: Math.log2, exp: Math.exp, abs: Math.abs, pi: Math.PI, e: Math.E,
+  floor: Math.floor, ceil: Math.ceil, round: Math.round, deg: x => x * 180 / Math.PI, rad: x => x * Math.PI / 180 };
+const x = process.argv[1].replace(/[a-z][a-z0-9]*/gi, w => 'M.' + w.toLowerCase());
+const r = Function('M', 'return (' + x + ')')(M);
+console.log(Number.isFinite(r) ? +r.toPrecision(12) : 'Tiada jawapan nyata (' + r + ')');`;
+
 // A real mouse click at a screen point (needs Accessibility). argv: x, y, clicks.
 const CLICK = `ObjC.import('CoreGraphics'); ObjC.import('AppKit');
 function run(argv) {
@@ -295,6 +321,13 @@ end tell
 end run`, text(a.query, 100)) },
 
   // Browser and web
+  search_web: { d: 'Cari tanpa membuka browser dalam Wikipedia Melayu, Wikipedia Inggeris dan Wikisource Melayu (hikayat dan teks lama): dapat tajuk, alamat dan ringkasan. Guna untuk sejarah, sains, pengetahuan am dan mencari cerita; kemudian guna read_web untuk membaca halaman. Untuk berita terkini guna web_search.', p: { query: S('Kata carian') },
+    run: a => [process.execPath, ['-e', SEARCH, text(a.query, 300)]] },
+  calculate: { d: 'Kira dengan tepat (matematik, Matematik Tambahan, peratus, wang). Sudut trigonometri dalam radian; guna rad(30) untuk darjah. log = log10, ln = log asli.', p: { expression: S('cth. (2*3+sqrt(16))^2/7, sin(rad(30)), ln(5)') },
+    run: a => [process.execPath, ['-e', CALC, mathExpr(a.expression)]] },
+  read_web: { d: 'Baca teks sesuatu laman web (cerita, hikayat, artikel, nota pelajaran) tanpa membukanya di skrin. Guna untuk membaca cerita atau fakta dari laman yang dijumpai melalui carian.', p: { url: S('URL penuh bermula https://') },
+    // The page is fetched and turned into plain text by macOS itself (textutil); the URL is an argument, never shell text.
+    run: a => ['/bin/zsh', ['-c', 'curl -fsL -m 20 --max-filesize 5000000 -A "Mozilla/5.0" "$1" | textutil -convert txt -format html -stdin -stdout | tr -s " \n"', 'jarvis', webUrl(a.url)]] },
   open_url: { d: 'Buka laman web. Guna semula tab laman yang sama jika sudah dibuka.', p: { url: S('URL penuh bermula https://') },
     run: a => { const u = webUrl(a.url); return browse(u, new URL(u).hostname.replace(/^www\./, '')); } },
   web_search: { d: 'Cari di Google dalam tab Google sedia ada (tidak buka tab baharu jika sudah ada)', p: { query: S('Kata carian') },
@@ -465,7 +498,7 @@ const GROUPS = {
   notes:     ['Nota', ['note_add', 'notes_search']],
   contacts:  ['Kenalan', ['contacts_search']],
   photos:    ['Foto', ['photos_search']],
-  web:       ['Browser dan carian web', ['open_url', 'web_search', 'youtube', 'maps', 'browser_tab', 'close_tab']],
+  web:       ['Browser, carian web dan kalkulator', ['calculate', 'search_web', 'read_web', 'open_url', 'web_search', 'youtube', 'maps', 'browser_tab', 'close_tab']],
   files:     ['Fail dan storan', ['open_folder', 'find_files', 'open_file', 'trash_file', 'storage_scan', 'disk_space']],
   apps:      ['Buka dan tutup aplikasi', ['open_app', 'quit_app', 'list_apps', 'open_any']],
   system:    ['Sistem (bunyi, Wi-Fi, tidur, restart)', ['set_volume', 'mute', 'dark_mode', 'wifi', 'battery', 'now', 'system_stats', 'sleep_display', 'sleep_mac', 'restart', 'shutdown']],
@@ -482,6 +515,21 @@ const SETTING_TYPES = { lang: 'string', voice: 'string', style: 'string', call: 
 const cleanSettings = s => Object.fromEntries(Object.entries(SETTING_TYPES)
   .filter(([k, type]) => s && typeof s[k] === type && String(s[k]).length <= 40)
   .map(([k]) => [k, s[k]]));
+// A character the user added: a 3D model plus how it looks and sounds. Points are [x, y, z] on the model.
+const VOICE_NAMES = ['Fenrir', 'Charon', 'Orus', 'Puck', 'Zephyr', 'Kore', 'Aoede', 'Leda'];
+const point = p => Array.isArray(p) && p.length === 3 && p.every(n => typeof n === 'number' && Number.isFinite(n)) ? p : null;
+function cleanCharacter(c) {
+  const out = {};
+  if (!c || typeof c !== 'object') return out;
+  if (typeof c.name === 'string' && c.name.trim()) out.name = c.name.trim().slice(0, 30);
+  if (VOICE_NAMES.includes(c.voice)) out.voice = c.voice;
+  if (typeof c.pitch === 'number' && Number.isFinite(c.pitch)) out.pitch = Math.min(1.6, Math.max(.7, c.pitch));
+  if (typeof c.persona === 'string') out.persona = c.persona.slice(0, 600);
+  if (point(c.mouth)) out.mouth = c.mouth;
+  if (Array.isArray(c.eyes)) out.eyes = c.eyes.filter(point).slice(0, 2);
+  if (typeof c.size === 'number' && c.size > 0 && c.size < 10) out.size = c.size;
+  return out;
+}
 const blocked = off => new Set(cleanOff(off).flatMap(id => GROUPS[id][1]));
 
 // Returns the .env text with the Gemini key set. The key is one line of key characters, so it cannot add other settings.
@@ -491,4 +539,4 @@ function envWithKey(text, key) {
   return /^GEMINI_API_KEY=.*$/m.test(text) ? text.replace(/^GEMINI_API_KEY=.*$/m, line) : text + (text && !text.endsWith('\n') ? '\n' : '') + line + '\n';
 }
 
-module.exports = { envWithKey, plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, cleanSettings };
+module.exports = { envWithKey, plan, declarations, confirm, image, slow, isLocal, HOME, groups, cleanOff, blocked, cleanSettings, cleanCharacter };
