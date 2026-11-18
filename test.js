@@ -322,8 +322,8 @@ test('a settings save in one window reaches every other window', async () => {
 
 test('character data keeps only safe, bounded values', () => {
   const { cleanCharacter } = require('./tools');
-  assert.deepStrictEqual(cleanCharacter({ name: ' Mimi ', voice: 'Puck', pitch: 1.3, persona: 'ceria', mouth: [0, 1, .5], eyes: [[0, 1.4, .5], 'x', [1, 2]], size: .1 }),
-    { name: 'Mimi', voice: 'Puck', pitch: 1.3, persona: 'ceria', mouth: [0, 1, .5], eyes: [[0, 1.4, .5]], size: .1 });
+  assert.deepStrictEqual(cleanCharacter({ name: ' Mimi ', voice: 'Puck', pitch: 1.3, persona: 'ceria', mouth: [0, 1, .5], eyes: [[0, 1.4, .5], 'x', [1, 2]], size: .1, eyeSize: .05 }),
+    { name: 'Mimi', voice: 'Puck', pitch: 1.3, persona: 'ceria', mouth: [0, 1, .5], eyes: [[0, 1.4, .5]], size: .1, eyeSize: .05 });
   assert.deepStrictEqual(cleanCharacter({ pitch: 9, voice: 'Bob', mouth: [0, 'a', 1], size: -1, name: '   ' }), { pitch: 1.6 });
   assert.strictEqual(cleanCharacter({ name: 'x'.repeat(50) }).name.length, 30);
   for (const bad of [null, 'teks', 42]) assert.deepStrictEqual(cleanCharacter(bad), {});

@@ -112,12 +112,14 @@ function buildPuppet(model, info) {
   holder.add(model);
   holder.position.copy(centre).negate();      // rotate around the middle of the model
   pivot.add(holder);
-  const R = info.size || Math.max(size.x, size.y, size.z) * .08;
+  // size = half the mouth's width (from the two corners the user clicked); the cheeks around it move too.
+  const half = info.size || Math.max(size.x, size.y, size.z) * .05, R = half * 1.7;
+  const eyeR = info.eyeSize || half * 1.2;
   const u = {
     uMouth: { value: new THREE.Vector3(...(info.mouth || [1e6, 1e6, 1e6])) },
     uEye0: { value: new THREE.Vector3(...(info.eyes?.[0] || [1e6, 1e6, 1e6])) },
     uEye1: { value: new THREE.Vector3(...(info.eyes?.[1] || [1e6, 1e6, 1e6])) },
-    uR: { value: R }, uOpen: { value: 0 }, uWide: { value: 0 }, uRound: { value: 0 }, uSmile: { value: 0 },
+    uR: { value: R }, uHalf: { value: half }, uEyeR: { value: eyeR }, uOpen: { value: 0 }, uWide: { value: 0 }, uRound: { value: 0 }, uSmile: { value: 0 },
     uBlink0: { value: 0 }, uBlink1: { value: 0 }, uWideEye: { value: 0 }, uLook: { value: 0 },
     uOrigin: { value: new THREE.Matrix4() },  // model space of the marks -> world, updated every frame
   };
@@ -126,14 +128,14 @@ function buildPuppet(model, info) {
     o.frustumCulled = false;
     for (const mat of [o.material].flat()) mat.onBeforeCompile = sh => {
       Object.assign(sh.uniforms, u);
-      sh.vertexShader = `uniform vec3 uMouth, uEye0, uEye1; uniform float uR, uOpen, uWide, uRound, uSmile, uBlink0, uBlink1, uWideEye, uLook;
+      sh.vertexShader = `uniform vec3 uMouth, uEye0, uEye1; uniform float uR, uHalf, uEyeR, uOpen, uWide, uRound, uSmile, uBlink0, uBlink1, uWideEye, uLook;
 uniform mat4 uOrigin; varying float vGap;
 vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
   vec3 e = wp - eye;
-  float g = 1.0 - smoothstep(0.0, uR * 0.9, length(e));
-  float iris = 1.0 - smoothstep(0.0, uR * 0.45, length(e));
+  float g = 1.0 - smoothstep(0.0, uEyeR, length(e));
+  float iris = 1.0 - smoothstep(0.0, uEyeR * 0.5, length(e));
   float lid = e.y > 0.0 ? 1.0 : 0.35;                     // the upper lid travels further than the lower
-  return vec3(uLook * iris * uR * 0.18,                    // the iris looks left and right
+  return vec3(uLook * iris * uEyeR * 0.2,                    // the iris looks left and right
               -e.y * g * blink * lid + e.y * g * uWideEye * 0.6, 0.0);   // squeeze shut, or open wide
 }
 ` + sh.vertexShader.replace('#include <begin_vertex>', `vec3 transformed = vec3(position);
@@ -143,12 +145,13 @@ vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
   float f = 1.0 - smoothstep(0.0, uR, length(m));
   float below = step(m.y, 0.0), side = abs(m.x) / uR;
   vec3 d = vec3(0.0);
-  d.y -= f * below * uOpen * uR * 0.6;                    // jaw and lower lip drop
-  d.y += f * (1.0 - below) * uOpen * uR * 0.12;           // upper lip lifts a little
+  d.y -= f * below * uOpen * uHalf * 0.9;                 // jaw and lower lip drop
+  d.y += f * (1.0 - below) * uOpen * uHalf * 0.15;        // upper lip lifts a little
   d.x += m.x * f * (uWide - uRound * 0.8) * 0.45;         // "i/e" stretch, "o/u" purse
   d.z += f * uRound * uR * 0.15;                          // lips push forward for "o/u"
   d.y += f * uSmile * uR * 0.3 * side;                    // corners up for a smile, down for a frown
-  vGap = f * uOpen * (1.0 - smoothstep(0.0, uR * 0.22, abs(m.y)));
+  // The dark opening: as wide as the mouth itself, a thin band along the lip line that the jaw drop stretches open.
+  vGap = uOpen * (1.0 - smoothstep(uHalf * 0.6, uHalf * 1.05, abs(m.x))) * (1.0 - smoothstep(0.0, uHalf * 0.3, abs(m.y)));
   d += eyeMove(wp, (uOrigin * vec4(uEye0, 1.0)).xyz, uBlink0);
   d += eyeMove(wp, (uOrigin * vec4(uEye1, 1.0)).xyz, uBlink1);
   transformed += inverse(mat3(modelMatrix)) * d;
@@ -163,14 +166,16 @@ vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
 // ?mark=1: click the mouth, then each eye. The points are saved with the character.
 if (MARK) {
   const note = Object.assign(document.createElement('div'), { style: 'position:fixed;top:12px;left:0;right:0;text-align:center;font:600 15px system-ui;color:#fff;text-shadow:0 1px 4px #000' });
-  const steps = ['Klik tengah MULUT watak', 'Klik MATA pertama (atau tekan Siap jika tiada mata)', 'Klik MATA kedua (atau tekan Siap)'];
+  const steps = ['Klik HUJUNG KIRI mulut watak', 'Klik HUJUNG KANAN mulut', 'Klik tengah MATA pertama (atau tekan Siap jika tiada mata)', 'Klik tengah MATA kedua (atau tekan Siap)'];
   const done = Object.assign(document.createElement('button'), { textContent: 'Siap', style: 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);font:600 15px system-ui;padding:8px 22px' });
   document.body.append(note, done);
   const marks = [];
   note.textContent = steps[0];
   const save = async () => {
-    if (!marks.length) return;
-    const body = { mouth: marks[0], eyes: marks.slice(1) };
+    if (marks.length < 2) return;
+    const [l, r] = marks.map(p => new THREE.Vector3(...p)), eyes = marks.slice(2);
+    const body = { mouth: l.clone().add(r).multiplyScalar(.5).toArray(), size: l.distanceTo(r) / 2, eyes };
+    if (eyes.length === 2) body.eyeSize = new THREE.Vector3(...eyes[0]).distanceTo(new THREE.Vector3(...eyes[1])) * .3;
     await fetch('/characters/' + encodeURIComponent(CHAR), { method: 'POST', body: JSON.stringify(body) });
     note.textContent = 'Disimpan. Tutup tetingkap ini.';
     done.remove();
@@ -183,10 +188,10 @@ if (MARK) {
     const hit = ray.intersectObject(puppet.model, true)[0];
     if (!hit) return;
     marks.push(puppet.model.worldToLocal(hit.point.clone()).toArray());
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(puppet.u.uR.value * .15), new THREE.MeshBasicMaterial({ color: 0xff3366 }));
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(puppet.size.y * .006), new THREE.MeshBasicMaterial({ color: 0xff3366 }));
     dot.position.copy(hit.point);
     scene.add(dot);
-    if (marks.length === 3) save(); else note.textContent = steps[marks.length];
+    if (marks.length === 4) save(); else note.textContent = steps[marks.length];
   };
 }
 

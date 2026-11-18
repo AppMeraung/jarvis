@@ -527,7 +527,7 @@ function cleanCharacter(c) {
   if (typeof c.persona === 'string') out.persona = c.persona.slice(0, 600);
   if (point(c.mouth)) out.mouth = c.mouth;
   if (Array.isArray(c.eyes)) out.eyes = c.eyes.filter(point).slice(0, 2);
-  if (typeof c.size === 'number' && c.size > 0 && c.size < 10) out.size = c.size;
+  for (const k of ['size', 'eyeSize']) if (typeof c[k] === 'number' && c[k] > 0 && c[k] < 10) out[k] = c[k];   // half mouth width, eye radius
   return out;
 }
 const blocked = off => new Set(cleanOff(off).flatMap(id => GROUPS[id][1]));
