@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")"
 node --test
 rm -rf dist && mkdir -p dist/Jarvis/app
-cp server.js tools.js index.html dist/Jarvis/app/
+cp server.js tools.js autopilot.js index.html dist/Jarvis/app/
 cp -R head facepoly dist/Jarvis/app/
 cp -R installer/ dist/Jarvis/
 chmod +x dist/Jarvis/*.command

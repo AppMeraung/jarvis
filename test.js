@@ -16,6 +16,7 @@ const SAMPLES = {
   mail_draft: { to: 'ali@example.com', subject: 'Hai', body: 'Apa khabar' },
   whatsapp_message: { phone: '012-345 6789', text: 'Ok, jumpa esok' },
   project_audit: {}, old_files: { folder: __dirname, days: 30 }, move_file: { from: __filename, to_folder: path.join(__dirname, 'x') },
+  agent_start: { folder: __dirname, task: 'Analisis projek' }, agent_reply: { session: '0d1d1716-45bf-4d36-a1bc-04dc12eb546e', message: 'Guna pg_dump' },
   remember: { fact: 'Tuan suka kopi tanpa gula' }, recall: { query: 'kopi' }, forget: { what: 'kopi' }, ask_claude: { question: 'Apa itu entropi?' },
   read_code: { path: __filename }, check_code: { path: __filename }, code_search: { query: 'node fetch timeout' }, code_agent: { folder: __dirname, task: 'Terangkan fail tools.js' }, flights: { from: 'KUL', to: 'Tokyo', date: '2026-12-10', back: '2026-12-17' },
   calendar_events: { days: 3 }, calendar_add: { title: 'Mesyuarat', start: '2026-11-20T15:30', minutes: 60 },
@@ -128,7 +129,7 @@ test('type_text turns line breaks into Return', () => {
 
 test('dangerous tools are flagged for on-screen confirmation, ordinary ones are not', () => {
   assert.deepStrictEqual([...confirm].sort(),
-    ['applescript', 'code_agent', 'forget', 'mail_send', 'mail_send_reply', 'move_file', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
+    ['agent_start', 'applescript', 'code_agent', 'forget', 'mail_send', 'mail_send_reply', 'move_file', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
   assert.ok(!confirm.includes('open_app'));
 });
 
@@ -466,4 +467,19 @@ test('file tidying: old items are listed, moves never overwrite, and system or h
     { from: path.join(HOME, 'Library', 'Caches'), to_folder: path.join(HOME, 'x') }, { from: path.join(HOME, '.ssh'), to_folder: path.join(HOME, 'x') },
     { from: __dirname, to_folder: path.join(__dirname, 'dalam') }]) assert.throws(() => plan('move_file', bad), JSON.stringify(bad));
   assert.ok(confirm.includes('move_file') && !confirm.includes('project_audit') && !confirm.includes('old_files'));
+});
+
+test('autopilot worker: the project is read only and dangerous commands are denied by the system settings', () => {
+  const { settings, rules } = require('./autopilot');
+  const s = JSON.parse(settings('/Users/x/projek'));
+  assert.strictEqual(s.sandbox.enabled, true);
+  assert.strictEqual(s.sandbox.failIfUnavailable, true);
+  assert.strictEqual(s.sandbox.allowUnsandboxedCommands, false);
+  assert.deepStrictEqual(s.sandbox.filesystem.denyWrite, ['/Users/x/projek']);
+  assert.ok(s.permissions.deny.includes('Edit(//Users/x/projek/**)'));   // a double slash means an absolute path
+  for (const cmd of ['rm', 'git push', 'vercel', 'sudo']) assert.ok(s.permissions.deny.includes(`Bash(${cmd}:*)`), cmd);
+  assert.ok(!s.sandbox.network.allowedDomains.includes('*'));
+  assert.match(rules('/p', '/w'), /READ ONLY[\s\S]*Never DROP, DELETE/);
+  assert.throws(() => plan('agent_reply', { session: '../x', message: 'hi' }));
+  assert.ok(plan('agent_start', { folder: __dirname, task: 'a; rm -rf ~' })[1].includes('a; rm -rf ~'));
 });
