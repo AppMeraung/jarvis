@@ -15,6 +15,7 @@ const SAMPLES = {
   mail_inbox: {}, projects_status: {}, mail_read: { id: 12 }, mail_draft_reply: { id: 12, body: 'Terima kasih' },
   mail_draft: { to: 'ali@example.com', subject: 'Hai', body: 'Apa khabar' },
   whatsapp_message: { phone: '012-345 6789', text: 'Ok, jumpa esok' },
+  project_audit: {}, old_files: { folder: __dirname, days: 30 }, move_file: { from: __filename, to_folder: path.join(__dirname, 'x') },
   remember: { fact: 'Tuan suka kopi tanpa gula' }, recall: { query: 'kopi' }, forget: { what: 'kopi' }, ask_claude: { question: 'Apa itu entropi?' },
   read_code: { path: __filename }, check_code: { path: __filename }, code_search: { query: 'node fetch timeout' }, code_agent: { folder: __dirname, task: 'Terangkan fail tools.js' }, flights: { from: 'KUL', to: 'Tokyo', date: '2026-12-10', back: '2026-12-17' },
   calendar_events: { days: 3 }, calendar_add: { title: 'Mesyuarat', start: '2026-11-20T15:30', minutes: 60 },
@@ -127,7 +128,7 @@ test('type_text turns line breaks into Return', () => {
 
 test('dangerous tools are flagged for on-screen confirmation, ordinary ones are not', () => {
   assert.deepStrictEqual([...confirm].sort(),
-    ['applescript', 'code_agent', 'forget', 'mail_send', 'mail_send_reply', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
+    ['applescript', 'code_agent', 'forget', 'mail_send', 'mail_send_reply', 'move_file', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
   assert.ok(!confirm.includes('open_app'));
 });
 
@@ -174,10 +175,11 @@ test('read-only checks need no confirmation; free-form scripts always do', () =>
   for (const script of ['', '  ', 42, undefined]) assert.throws(() => plan('applescript', { script }));
 });
 
-test('storage_scan never deletes anything', () => {
-  const script = plan('storage_scan', {})[1][1];
-  assert.ok(!/\b(rm|mv|rmdir|unlink|trash_file)\b/.test(script));
-  assert.deepStrictEqual(slow, ['storage_scan']);
+test('storage_scan, project_audit and old_files never delete or move anything', () => {
+  for (const [name, args] of [['storage_scan', {}], ['project_audit', {}], ['old_files', { folder: __dirname }]]) {
+    assert.ok(!/\b(rm|mv|rmdir|unlink|trash_file|rmSync|unlinkSync|renameSync)\b/.test(plan(name, args)[1].join(' ')), name);
+  }
+  assert.deepStrictEqual(slow.sort(), ['old_files', 'project_audit', 'storage_scan']);
   assert.deepStrictEqual(image, ['see_screen']);
 });
 
@@ -443,4 +445,25 @@ test('the server keeps only real conversation lines and hands memory to a new se
     server.kill();
     fs.rmSync(dir, { recursive: true });
   }
+});
+
+test('file tidying: old items are listed, moves never overwrite, and system or home folders cannot be moved', () => {
+  const dir = fs.mkdtempSync(path.join(__dirname, '.tidy-'));
+  const run = (name, args) => { const [file, argv] = plan(name, args); return execFileSync(file, argv, { encoding: 'utf8' }).trim(); };
+  try {
+    const oldFile = path.join(dir, 'lama.txt'), newFile = path.join(dir, 'baru.txt');
+    fs.writeFileSync(oldFile, 'x'); fs.writeFileSync(newFile, 'y');
+    fs.utimesSync(oldFile, new Date('2020-01-01'), new Date('2020-01-01'));
+    const list = run('old_files', { folder: dir, days: 365 });
+    assert.match(list, /lama\.txt/); assert.doesNotMatch(list, /baru\.txt/);
+    assert.match(run('move_file', { from: oldFile, to_folder: path.join(dir, 'Projek A') }), /Dialih/);
+    assert.ok(fs.existsSync(path.join(dir, 'Projek A', 'lama.txt')));
+    fs.writeFileSync(path.join(dir, 'lama.txt'), 'lain');
+    assert.match(run('move_file', { from: path.join(dir, 'lama.txt'), to_folder: path.join(dir, 'Projek A') }), /tidak dialih/);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'Projek A', 'lama.txt'), 'utf8'), 'x');   // the first file is untouched
+  } finally { fs.rmSync(dir, { recursive: true }); }
+  for (const bad of [{ from: path.join(HOME, 'Desktop'), to_folder: path.join(HOME, 'x') }, { from: '/etc/hosts', to_folder: path.join(HOME, 'x') },
+    { from: path.join(HOME, 'Library', 'Caches'), to_folder: path.join(HOME, 'x') }, { from: path.join(HOME, '.ssh'), to_folder: path.join(HOME, 'x') },
+    { from: __dirname, to_folder: path.join(__dirname, 'dalam') }]) assert.throws(() => plan('move_file', bad), JSON.stringify(bad));
+  assert.ok(confirm.includes('move_file') && !confirm.includes('project_audit') && !confirm.includes('old_files'));
 });

@@ -211,6 +211,38 @@ console.log(hits.map(h => new Date(h.l.at).toLocaleString('ms-MY') + ' ' + h.l.w
 // A second brain for hard questions: Claude Code answers in an empty folder, with web search, and cannot touch files.
 const ASK_CLAUDE = 'd=$(mktemp -d); cd "$d"; for c in "$HOME/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do [ -x "$c" ] && { "$c" -p "$1" --allowedTools "WebSearch,WebFetch" --disallowedTools "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit" --output-format text; r=$?; rm -rf "$d"; exit $r; }; done; rm -rf "$d"; echo "Claude Code tidak dipasang di Mac ini, jadi otak kedua tidak tersedia."';
 
+// Every git project in the usual places, and whether all of its work is already safe on GitHub. Read only.
+const PROJECT_AUDIT = `for root in ~/Claude ~/Desktop ~/Documents ~/Developer ~/Projects ~/Code ~/Syarikat ~/Downloads ~/Sites; do
+  [ -d "$root" ] && find "$root" -maxdepth 4 \\( -name node_modules -o -name .Trash -o -name Library \\) -prune -o -name .git -type d -print 2>/dev/null
+done | sort -u | while read g; do
+  d="\${g%/.git}"; remote=$(git -C "$d" remote get-url origin 2>/dev/null | sed -E 's#https://[^@]*@#https://#')
+  dirty=$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  ahead=$(git -C "$d" rev-list --count @{u}..HEAD 2>/dev/null || echo "?")
+  last=$(git -C "$d" log -1 --format=%cr 2>/dev/null); size=$(du -sh "$d" 2>/dev/null | cut -f1)
+  regen=$(du -shc "$d"/node_modules "$d"/.next "$d"/dist "$d"/build "$d"/ios/Pods "$d"/android/.gradle "$d"/.dart_tool 2>/dev/null | tail -1 | cut -f1)
+  if [[ "$remote" == *github.com* && "$dirty" == 0 && "$ahead" == 0 ]]; then state="SELAMAT di GitHub"; else state="BELUM SELAMAT"; fi
+  echo "$state | \${d/#$HOME/~} | saiz $size (boleh dijana semula: \${regen:-0}) | commit terakhir $last | belum commit: $dirty | belum push: $ahead | \${remote:-tiada remote}"
+done | sort`;
+// Items in a folder not opened for a while (Spotlight's "last opened", else last changed), biggest first. Read only.
+const OLD_FILES = `const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
+const dir = process.argv[1], days = +process.argv[2], cutoff = Date.now() - days * 864e5;
+const items = fs.readdirSync(dir).filter(n => !n.startsWith('.')).map(n => path.join(dir, n)).slice(0, 2000);
+const used = items.length ? execFileSync('mdls', ['-raw', '-name', 'kMDItemLastUsedDate', ...items], { encoding: 'utf8' }).split('\\0') : [];
+const old = items.map((p, i) => { const u = Date.parse(used[i]); let st; try { st = fs.statSync(p); } catch { return null; }
+  return { p, when: Number.isNaN(u) ? st.mtimeMs : u }; }).filter(x => x && x.when < cutoff);
+for (const x of old) { try { x.kb = +execFileSync('du', ['-sk', x.p], { encoding: 'utf8' }).split('\\t')[0]; } catch { x.kb = 0; } }
+old.sort((a, b) => b.kb - a.kb);
+const size = kb => kb > 1048576 ? (kb / 1048576).toFixed(1) + ' GB' : kb > 1024 ? (kb / 1024).toFixed(0) + ' MB' : kb + ' KB';
+console.log(old.length ? old.slice(0, 40).map(x => size(x.kb) + ' | tidak dibuka sejak ' + new Date(x.when).toLocaleDateString('ms-MY') + ' | ' + x.p).join('\\n')
+  + '\\nJumlah: ' + old.length + ' item, ' + size(old.reduce((s, x) => s + x.kb, 0)) : 'Tiada item yang tidak dibuka lebih ' + days + ' hari.');`;
+// Folders that must stay where macOS expects them.
+const KEEP_PUT = ['Desktop', 'Documents', 'Downloads', 'Library', 'Applications', 'Pictures', 'Music', 'Movies', 'Public'].map(n => path.join(HOME, n));
+function homeItem(v) {
+  const p = path.resolve(text(v, 1000).replace(/^~(?=\/|$)/, HOME));
+  if (!p.startsWith(HOME + path.sep) || path.relative(HOME, p).startsWith('.') || p.includes('/Library/')) bad('mesti dalam folder pengguna, bukan fail sistem atau tersembunyi');
+  return p;
+}
+
 // Exact arithmetic for maths questions. Only numbers, operators, brackets and known maths words get through.
 const CALC_WORDS = ['sqrt', 'cbrt', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'log', 'ln', 'log10', 'log2', 'exp', 'abs', 'pi', 'e', 'floor', 'ceil', 'round', 'deg', 'rad'];
 function mathExpr(v) {
@@ -444,6 +476,18 @@ end run`, text(a.query, 100)) },
     run: a => [process.execPath, ['-e', FORGET, memoryDir(), text(a.what, 200)]] },
   ask_claude: { long: true, d: 'Otak kedua: tanya Claude (AI Anthropic, dengan carian web) untuk soalan yang sukar atau panjang: penaakulan rumit, matematik tinggi, analisis, penulisan panjang, reka bentuk sistem, perancangan. Ambil masa beberapa saat hingga seminit. Tidak boleh membaca atau mengubah fail.', p: { question: S('Soalan lengkap dengan semua konteks yang perlu, dan bahasa jawapan') },
     run: a => ['/bin/zsh', ['-c', ASK_CLAUDE, 'jarvis', text(a.question, 8000)]] },
+  project_audit: { slow: true, d: 'Senarai semua projek Git di Mac (Claude, Desktop, Documents, Developer, Projects, Syarikat, Downloads): sama ada SELAMAT di GitHub (tiada kerja belum commit atau belum push) atau BELUM SELAMAT, saiz, saiz yang boleh dijana semula (node_modules, build), commit terakhir dan remote. Hanya membaca.', p: {},
+    run: () => ['/bin/zsh', ['-c', PROJECT_AUDIT]] },
+  old_files: { slow: true, d: 'Senarai fail dan folder dalam satu folder yang tidak dibuka lebih N hari, paling besar dahulu, dengan tarikh terakhir dibuka. Hanya membaca; tidak memadam.', p: { folder: S('Laluan penuh folder, cth. ~/Downloads'), days: N('Bilangan hari, lalai 180') }, opt: ['days'],
+    run: a => [process.execPath, ['-e', OLD_FILES, codePath(a.folder, true), String(a.days === undefined ? 180 : int(a.days, 1, 10000))]] },
+  move_file: { confirm: true, d: 'Alihkan satu fail atau folder ke folder lain (dicipta jika belum ada) untuk menyusun fail ikut projek. Tidak menimpa fail sedia ada. Perlu kelulusan pengguna.', p: { from: S('Laluan penuh fail atau folder'), to_folder: S('Laluan penuh folder destinasi') },
+    run: a => {
+      const from = homeItem(a.from), to = homeItem(a.to_folder);
+      if (KEEP_PUT.includes(from)) bad('folder ini mesti kekal di tempatnya');
+      if (to === from || to.startsWith(from + path.sep)) bad('tidak boleh alih folder ke dalam dirinya sendiri');
+      if (!fs.existsSync(from)) bad('tidak dijumpai: ' + from);
+      return ['/bin/zsh', ['-c', 'mkdir -p "$2" && if [ -e "$2/${1:t}" ]; then echo "Sudah ada item bernama ${1:t} di $2; tidak dialih."; else mv -n "$1" "$2/" && echo "Dialih ke $2/${1:t}"; fi', 'jarvis', from, to]];
+    } },
   calculate: { d: 'Kira dengan tepat (matematik, Matematik Tambahan, peratus, wang). Sudut trigonometri dalam radian; guna rad(30) untuk darjah. log = log10, ln = log asli.', p: { expression: S('cth. (2*3+sqrt(16))^2/7, sin(rad(30)), ln(5)') },
     run: a => [process.execPath, ['-e', CALC, mathExpr(a.expression)]] },
   read_web: { d: 'Baca teks sesuatu laman web (cerita, hikayat, artikel, nota pelajaran) tanpa membukanya di skrin. Guna untuk membaca cerita atau fakta dari laman yang dijumpai melalui carian.', p: { url: S('URL penuh bermula https://') },
@@ -622,7 +666,7 @@ const GROUPS = {
   contacts:  ['Kenalan', ['contacts_search']],
   photos:    ['Foto', ['photos_search']],
   web:       ['Browser, carian web dan kalkulator', ['flights', 'news', 'weather', 'exchange_rate', 'calculate', 'search_web', 'read_web', 'open_url', 'web_search', 'youtube', 'maps', 'browser_tab', 'close_tab']],
-  files:     ['Fail dan storan', ['open_folder', 'find_files', 'open_file', 'trash_file', 'storage_scan', 'disk_space']],
+  files:     ['Fail dan storan', ['open_folder', 'find_files', 'open_file', 'trash_file', 'storage_scan', 'disk_space', 'project_audit', 'old_files', 'move_file']],
   apps:      ['Buka dan tutup aplikasi', ['open_app', 'quit_app', 'list_apps', 'open_any']],
   system:    ['Sistem (bunyi, Wi-Fi, tidur, restart)', ['set_volume', 'mute', 'dark_mode', 'wifi', 'battery', 'now', 'system_stats', 'sleep_display', 'sleep_mac', 'restart', 'shutdown']],
   screen:    ['Skrin dan papan kekunci', ['screenshot', 'see_screen', 'type_text', 'press_key', 'record_screen', 'stop_recording', 'mouse_click']],
