@@ -495,8 +495,8 @@ test('Mac audio keeps only the shared sound, and refuses a share without sound',
   const s = await grab(media);
   assert.strictEqual(media.asked.systemAudio, 'include');
   assert.strictEqual(media.asked.audio.restrictOwnAudio, true);   // Jarvis's own voice is left out where Chrome supports it
-  assert.ok(withSound[0].stopped, 'the picture is stopped');
-  assert.ok(!withSound[1].stopped, 'the sound keeps running');
+  assert.ok(withSound.every(t => !t.stopped), 'picture and sound keep running, stopping the picture can end the sound');
+  assert.strictEqual(media.asked.video.frameRate, 1);   // the picture is kept cheap
   assert.strictEqual(s.getAudioTracks().length, 1);
 
   const silent = [track('video')];
