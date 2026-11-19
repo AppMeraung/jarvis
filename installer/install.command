@@ -24,6 +24,12 @@ echo "Jarvis disalin ke: $DEST"
 [ -n "$JARVIS_NO_AGENT" ] && exit 0   # untuk ujian: salin sahaja
 
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && sleep 1 || true   # an older copy of this install stops first
+if curl -s -m 2 "$URL/config" >/dev/null 2>&1; then   # another Jarvis (for example a developer copy) already runs here
+  echo "Jarvis sudah berjalan di Mac ini ($URL), jadi salinan kedua tidak dihidupkan."
+  echo "Fail baharu disalin ke $DEST. Buka $URL untuk guna Jarvis yang sedia ada."
+  exit 0
+fi
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs" "$HOME/Applications"
 OPEN="open -na 'Google Chrome' --args --app=$URL 2>/dev/null || open $URL"
 cat > "$PLIST" <<PLIST
@@ -44,7 +50,6 @@ cat > "$PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
 rm -rf "$HOME/Applications/Jarvis.app"
