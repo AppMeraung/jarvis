@@ -74,7 +74,7 @@ new GLTFLoader().load(CHAR ? `/characters/${encodeURIComponent(CHAR)}/model.glb`
   gltf.scene.traverse(o => { if (o.morphTargetDictionary?.jawOpen !== undefined) mesh = o; if (o.name === 'Head') head = o; });
   if (!mesh) {                                // a model without face controls: the face is moved by the shader instead
     const info = (await fetch('/characters').then(r => r.json()).catch(() => [])).find(c => c.id === CHAR) || {};
-    puppet = buildPuppet(gltf.scene, info);
+    puppet = buildPuppet(gltf.scene, info, gltf.animations);
     head = puppet.pivot;
     fit = puppet.size;
     scene.add(puppet.pivot);
@@ -103,17 +103,35 @@ new GLTFLoader().load(CHAR ? `/characters/${encodeURIComponent(CHAR)}/model.glb`
 // The jaw drops, the lips stretch for "i/e" and purse for "o/u", the corners lift for a smile, the gap darkens,
 // and the eyes close to blink, narrow when angry and widen when surprised.
 const face = { open: 0, wide: 0, round: 0, smile: 0, blinkL: 0, blinkR: 0, wideEye: 0 };
-function buildPuppet(model, info) {
+function buildPuppet(model, info, clips = []) {
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
   const sun = new THREE.DirectionalLight(0xffffff, 2);
   sun.position.set(1, 2, 3);
   scene.add(sun);
-  const box = new THREE.Box3().setFromObject(model), size = box.getSize(new THREE.Vector3());
+  const box = new THREE.Box3().setFromObject(model);
+  let size = box.getSize(new THREE.Vector3());
   const centre = box.getCenter(new THREE.Vector3());
   const pivot = new THREE.Group(), holder = new THREE.Group();
   holder.add(model);
   holder.position.copy(centre).negate();      // rotate around the middle of the model
-  pivot.add(holder);
+  const turn = new THREE.Group();             // some models face sideways; info.turn shows their face
+  turn.rotation.y = info.turn || 0;
+  turn.add(holder);
+  pivot.add(turn);
+  if (info.turn) {                            // frame the turned model, not the original box
+    pivot.updateMatrixWorld(true);
+    const turned = new THREE.Box3().setFromObject(pivot);
+    turn.position.sub(turned.getCenter(new THREE.Vector3()));
+    size = turned.getSize(new THREE.Vector3());
+  }
+  // A model with its own animations: a calm one loops, and the mood picks a short move (info.moves, e.g. happy: "salute").
+  let mixer, idle, moves = {};
+  if (clips.length && !MARK) {
+    mixer = new THREE.AnimationMixer(model);
+    const byName = n => clips.find(c => c.name === n);
+    idle = mixer.clipAction(byName(info.idle) || clips.find(c => /idle|breeze|breath|stand/i.test(c.name)) || clips[0]).play();
+    for (const [mood, name] of Object.entries(info.moves || {})) if (byName(name)) moves[mood] = mixer.clipAction(byName(name));
+  }
   // size = half the mouth's width (from the two corners the user clicked); the cheeks around it move too.
   const half = info.size || Math.max(size.x, size.y, size.z) * .05, R = half * 1.7;
   const eyeR = info.eyeSize || half * 1.2;
@@ -123,6 +141,8 @@ function buildPuppet(model, info) {
     uEye1: { value: new THREE.Vector3(...(info.eyes?.[1] || [1e6, 1e6, 1e6])) },
     uR: { value: R }, uHalf: { value: half }, uEyeR: { value: eyeR }, uOpen: { value: 0 }, uWide: { value: 0 }, uRound: { value: 0 }, uSmile: { value: 0 },
     uBlink0: { value: 0 }, uBlink1: { value: 0 }, uWideEye: { value: 0 }, uLook: { value: 0 },
+    uPulse: { value: info.mouthStyle === 'pulse' ? 1 : 0 },   // a trumpet or round mouth widens instead of dropping a jaw
+    uGap: { value: info.mouthStyle ? 0 : 1 },                // a mouth sculpted open already has its own teeth, so no painted gap
     uOrigin: { value: new THREE.Matrix4() },  // model space of the marks -> world, updated every frame
   };
   model.traverse(o => {
@@ -130,7 +150,7 @@ function buildPuppet(model, info) {
     o.frustumCulled = false;
     for (const mat of [o.material].flat()) mat.onBeforeCompile = sh => {
       Object.assign(sh.uniforms, u);
-      sh.vertexShader = `uniform vec3 uMouth, uEye0, uEye1; uniform float uR, uHalf, uEyeR, uOpen, uWide, uRound, uSmile, uBlink0, uBlink1, uWideEye, uLook;
+      sh.vertexShader = `uniform vec3 uMouth, uEye0, uEye1; uniform float uR, uHalf, uEyeR, uOpen, uWide, uRound, uSmile, uBlink0, uBlink1, uWideEye, uLook, uPulse, uGap;
 uniform mat4 uOrigin; varying float vGap, vLip;
 vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
   vec3 e = wp - eye;
@@ -147,13 +167,15 @@ vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
   float f = 1.0 - smoothstep(0.0, uR, length(m));
   float below = step(m.y, 0.0), side = abs(m.x) / uR;
   vec3 d = vec3(0.0);
-  d.y -= f * below * uOpen * uHalf * 0.9;                 // jaw and lower lip drop
-  d.y += f * (1.0 - below) * uOpen * uHalf * 0.15;        // upper lip lifts a little
+  float jaw = 1.0 - uPulse;
+  d.y -= jaw * f * below * uOpen * uHalf * (0.4 + 0.5 * uGap);   // jaw and lower lip drop
+  d.y += jaw * f * (1.0 - below) * uOpen * uHalf * 0.15;  // upper lip lifts a little
+  d += uPulse * m * f * uOpen * 0.7;                      // or the whole mouth widens outwards
   d.x += m.x * f * (uWide - uRound * 0.8) * 0.45;         // "i/e" stretch, "o/u" purse
   d.z += f * uRound * uR * 0.15;                          // lips push forward for "o/u"
   d.y += f * uSmile * uR * 0.3 * side;                    // corners up for a smile, down for a frown
   // The dark opening: as wide as the mouth itself, a thin band along the lip line that the jaw drop stretches open.
-  vGap = uOpen * (1.0 - smoothstep(uHalf * 0.6, uHalf * 1.05, abs(m.x))) * (1.0 - smoothstep(0.0, uHalf * 0.3, abs(m.y)));
+  vGap = uGap * uOpen * (1.0 - smoothstep(uHalf * 0.6, uHalf * 1.05, abs(m.x))) * (1.0 - smoothstep(0.0, uHalf * 0.3, abs(m.y)));
   vLip = clamp(m.y / (uHalf * 0.3), -1.0, 1.0);          // across the opening: +1 upper lip, -1 lower lip
   d += eyeMove(wp, (uOrigin * vec4(uEye0, 1.0)).xyz, uBlink0);
   d += eyeMove(wp, (uOrigin * vec4(uEye1, 1.0)).xyz, uBlink1);
@@ -171,7 +193,7 @@ vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
 }`);
     };
   });
-  return { pivot, model, u, size, marked: !!info.mouth };
+  return { pivot, model, u, size, marked: !!info.mouth, mixer, idle, moves };
 }
 
 // ?mark=1: click the mouth, then each eye. The points are saved with the character.
@@ -327,7 +349,7 @@ resize();
 const tint = new THREE.Color(), target = new THREE.Color(), hue = new THREE.Color(0x55d0ff), want = new THREE.Color();
 const now = Object.fromEntries(KEYS.map(k => [k, 0]));
 const mouth = MORPHS.map(() => 0);
-let speech = 0, blinkAt = 2, lastLevel = 0, saccade = 0, glance = 0, gaze = 0;
+let shownMood = 'neutral', lastT = 0, speech = 0, blinkAt = 2, lastLevel = 0, saccade = 0, glance = 0, gaze = 0;
 const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 
 renderer.setAnimationLoop(ms => {
@@ -397,6 +419,15 @@ renderer.setAnimationLoop(ms => {
   } else if (puppet) {
     // A cartoon has a body: it bobs and squashes a little with each syllable.
     puppet.pivot.position.y = speech * fit.y * .015;
+    if (puppet.mixer) {
+      if (state.mood !== shownMood) {         // a new mood plays its move once, then the calm loop returns
+        const move = puppet.moves[state.mood];
+        if (move) { move.reset().setLoop(THREE.LoopOnce, 1).fadeIn(.3).play(); puppet.idle.fadeOut(.3); move.getMixer().addEventListener('finished', () => puppet.idle.reset().fadeIn(.4).play(), { once: true }); }
+        shownMood = state.mood;
+      }
+      puppet.mixer.update(Math.min(.05, t - (lastT || t)));
+    }
+    lastT = t;
     puppet.pivot.scale.set(1 - speech * .015, 1 + speech * .025, 1 - speech * .015);
   } else mesh.material.color.copy(tint).multiplyScalar(1 + speech * .08);
   renderer.render(scene, camera);

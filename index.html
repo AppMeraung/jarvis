@@ -546,6 +546,29 @@ function dropMacAudio() {
 }
 $('macAudio').onclick = toggleMacAudio;
 
+// The face also follows what Jarvis is saying, so it smiles, frowns or laughs with the words themselves.
+// set_expression from the model wins for a few seconds; otherwise the latest clue in the spoken sentence decides.
+const MOOD_WORDS = [
+  ['excited', /\b(wah|wow|yeay|yay|banana|pew|teruja|luar biasa|hebatnya|syoknya|mantap)\b|!{2,}/i],
+  ['happy', /\b(ha(ha)+|he(he)+|ahaha\w*|bagus|hebat|seronok|gembira|suka|terima kasih|tahniah|alhamdulillah|best|syabas|senang|tank yu)\b/i],
+  ['sad', /\b(maaf|sedih|kasihan|malangnya|sayangnya|takziah|kecewa|sorry|sayu|tak dapat)\b/i],
+  ['angry', /\b(marah|geram|bengang|tak boleh terima|keterlaluan|zombi)\b/i],
+  ['surprised', /\b(eh|hah|terkejut|biar betul|serius\?|alamak|astaghfirullah)\b/i],
+  ['thinking', /\b(hmm+|biar saya (fikir|semak|kira)|sekejap|mari saya|saya rasa|mungkin|kemungkinan)\b/i],
+  ['confused', /\b(keliru|tak faham|pelik|kurang pasti)\b/i],
+];
+let moodByTool = 0, spoken = '';
+function moodFromWords(text) {
+  spoken = (spoken + text).slice(-160);
+  if (Date.now() - moodByTool < 6000) return;
+  let best, at = -1;
+  for (const [m, re] of MOOD_WORDS) {
+    const all = [...spoken.matchAll(new RegExp(re.source, 'gi'))];
+    if (all.length && all.at(-1).index > at) { at = all.at(-1).index; best = m; }
+  }
+  if (best && best !== mood) setMood(best);
+}
+
 function setMood(m) {
   if (!MOODS.includes(m)) return { error: 'pilihan: ' + MOODS.join(', ') };
   mood = m;
@@ -555,7 +578,7 @@ function setMood(m) {
 }
 
 async function runTool(fc) {
-  if (fc.name === 'set_expression') return setMood(fc.args?.mood);
+  if (fc.name === 'set_expression') { moodByTool = Date.now(); return setMood(fc.args?.mood); }
   // shortcut: native confirm() pauses audio while it is open, replace with an in-page dialog if that annoys
   const risky = cfg.confirm.includes(fc.name);
   if (risky && !confirm(`Jarvis nak buat ini:\n\n${fc.name}\n${JSON.stringify(fc.args, null, 2)}\n\nBenarkan? (Enter = Ya, Esc = Tidak)`)) {
@@ -587,9 +610,9 @@ async function onMsg(m) {
     if (c.interrupted) hush();
     c.modelTurn?.parts?.forEach(p => p.inlineData && play(p.inlineData.data));
     if (c.inputTranscription?.text) { log('ANDA', c.inputTranscription.text, true); heardInSession(c.inputTranscription.text); }
-    if (c.outputTranscription?.text) log('JARVIS', c.outputTranscription.text, true);
+    if (c.outputTranscription?.text) { log('JARVIS', c.outputTranscription.text, true); moodFromWords(c.outputTranscription.text); }
     if (c.turnComplete) {
-      keep(last); last = null; said = '';
+      keep(last); last = null; said = ''; spoken = '';
       if (bye) { clearTimeout(byeTimer); byeTimer = setTimeout(stop, Math.max(0, nextT - outCtx.currentTime) * 1000 + 400); }   // let the goodbye finish
     }
   }

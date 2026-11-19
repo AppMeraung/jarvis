@@ -702,6 +702,12 @@ function cleanCharacter(c) {
   if (point(c.mouth)) out.mouth = c.mouth;
   if (Array.isArray(c.eyes)) out.eyes = c.eyes.filter(point).slice(0, 2);
   for (const k of ['size', 'eyeSize']) if (typeof c[k] === 'number' && c[k] > 0 && c[k] < 10) out[k] = c[k];   // half mouth width, eye radius
+  if (typeof c.turn === 'number' && Math.abs(c.turn) <= 7) out.turn = c.turn;                            // radians to face the camera
+  if (['jaw', 'pulse', 'open'].includes(c.mouthStyle)) out.mouthStyle = c.mouthStyle;
+  if (typeof c.idle === 'string' && c.idle.length <= 40) out.idle = c.idle;
+  if (c.moves && typeof c.moves === 'object' && !Array.isArray(c.moves)) {                              // mood -> animation name
+    out.moves = Object.fromEntries(Object.entries(c.moves).filter(([k, v]) => /^[a-z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 40).slice(0, 12));
+  }
   return out;
 }
 const blocked = off => new Set(cleanOff(off).flatMap(id => GROUPS[id][1]));

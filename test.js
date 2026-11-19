@@ -333,6 +333,9 @@ test('character data keeps only safe, bounded values', () => {
   assert.deepStrictEqual(cleanCharacter({ pitch: 9, voice: 'Bob', mouth: [0, 'a', 1], size: -1, name: '   ' }), { pitch: 1.6 });
   assert.strictEqual(cleanCharacter({ name: 'x'.repeat(50) }).name.length, 30);
   for (const bad of [null, 'teks', 42]) assert.deepStrictEqual(cleanCharacter(bad), {});
+  assert.deepStrictEqual(cleanCharacter({ turn: -1.2, mouthStyle: 'pulse', idle: 'breeze', moves: { happy: 'salute', 'x y': 'z', sad: 5 } }),
+    { turn: -1.2, mouthStyle: 'pulse', idle: 'breeze', moves: { happy: 'salute' } });
+  assert.deepStrictEqual(cleanCharacter({ turn: 99, mouthStyle: 'big', moves: ['a'] }), {});
 });
 
 test('characters can be added, edited, listed, served and removed, and bad ids are refused', async () => {
@@ -502,4 +505,19 @@ test('Mac audio keeps only the shared sound, and refuses a share without sound',
   const silent = [track('video')];
   await assert.rejects(grab(fake(silent)), /Entire Screen/);
   assert.ok(silent.every(t => t.stopped), 'a share without sound is closed');
+});
+
+test('the face picks a mood from the words Jarvis says, the latest clue winning', () => {
+  const page = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const MOOD_WORDS = new Function(page.match(/const MOOD_WORDS = \[[\s\S]*?\n\];/)[0] + 'return MOOD_WORDS;')();
+  const pick = text => { let best, at = -1;
+    for (const [m, re] of MOOD_WORDS) { const all = [...text.matchAll(new RegExp(re.source, 'gi'))]; if (all.length && all.at(-1).index > at) { at = all.at(-1).index; best = m; } }
+    return best; };
+  assert.strictEqual(pick('Hahaha, itu lucu!'), 'happy');
+  assert.strictEqual(pick('Maaf Tuan, saya tak dapat buka fail itu.'), 'sad');
+  assert.strictEqual(pick('Wah, hebatnya!!'), 'excited');
+  assert.strictEqual(pick('Hmm, biar saya semak dahulu.'), 'thinking');
+  assert.strictEqual(pick('Maaf tadi, tapi tahniah Tuan!'), 'happy');   // the later word decides
+  assert.strictEqual(pick('Mesyuarat jam tiga petang.'), undefined);
+  assert.strictEqual(pick('suka-suka hati'), 'happy');
 });
