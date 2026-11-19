@@ -2,37 +2,56 @@ JARVIS - pembantu suara AI untuk Mac
 ====================================
 
 Keperluan
-- Mac dengan macOS 13 atau lebih baru
-- Node.js 20 atau lebih baru (percuma, https://nodejs.org)
+- Mac dengan macOS 13 atau lebih baru (Apple Silicon atau Intel). Jarvis belum ada untuk Windows.
+- Node.js 20 atau lebih baru (percuma, https://nodejs.org, butang LTS)
 - Google Chrome (disyorkan) atau Safari
 - Kunci API Gemini anda sendiri (percuma, https://aistudio.google.com/apikey)
+- Pilihan: Claude Code (https://claude.com/claude-code) untuk otak kedua, kerja kod dan autopilot
 
 Pasang
-1. Klik kanan install.command, pilih Open, kemudian Open sekali lagi.
-   (Kali pertama macOS akan bertanya kerana fail ini dimuat turun dari internet.)
-2. Jarvis terbuka sendiri. Tekan TETAPAN, tampal kunci API Gemini, tekan SIMPAN.
-3. Tekan MULA dan benarkan mikrofon. Cakap terus.
+1. Dwiklik install.command.
+   Jika macOS kata fail ini tidak boleh dibuka kerana dimuat turun dari internet:
+   buka System Settings > Privacy & Security, skrol ke bawah, tekan "Open Anyway", kemudian dwiklik semula.
+   (Pada macOS lama: klik kanan install.command, pilih Open, kemudian Open sekali lagi.)
+2. Jika diminta, pasang Node.js dari halaman yang dibuka, kemudian dwiklik install.command semula.
+3. Jarvis terbuka sendiri di browser. Tekan TETAPAN, tampal kunci API Gemini, tekan SIMPAN.
+4. Tekan MULA dan benarkan mikrofon. Cakap terus, atau sebut "Hai Jarvis".
+
+Cara lain (tanpa amaran macOS): buka app Terminal, tampal baris ini, tekan Enter:
+   curl -fsSL https://raw.githubusercontent.com/AppMeraung/jarvis/main/get.sh | zsh
 
 Kebenaran macOS
 Kali pertama Jarvis mengawal sesuatu app (Mail, Calendar, Spotify...), macOS akan bertanya. Tekan Allow.
-Untuk menaip, pintasan papan kekunci dan main lagu automatik: System Settings > Privacy & Security > Accessibility > benarkan "node".
-Untuk Jarvis melihat skrin: System Settings > Privacy & Security > Screen & System Audio Recording > benarkan "node".
+Untuk menaip, klik tetikus dan main lagu automatik: System Settings > Privacy & Security > Accessibility > benarkan "node".
+Untuk Jarvis melihat dan merakam skrin: System Settings > Privacy & Security > Screen & System Audio Recording > benarkan "node".
+
+Apa yang ada
+- Lebih 70 kebolehan: app, muzik, emel, kalendar, WhatsApp, fail, browser, berita, cuaca, matematik, cerita, kod.
+- Butang WATAK untuk tukar wajah dan suara; tambah model 3D (.glb) anda sendiri di TETAPAN.
+- "Hai Jarvis" untuk mula, "Bye Jarvis" untuk henti.
+- Jarvis mengingati perbualan dan fakta tentang anda (di Mac ini sahaja; boleh dimatikan di TETAPAN).
+- Butang PANDUAN dalam Jarvis menyenaraikan semuanya.
 
 Kawalan anda
-Di TETAPAN ada suis untuk setiap kumpulan (Spotify, emel, kalendar, fail...). Matikan apa yang anda tidak mahu Jarvis sentuh.
-Tindakan berisiko (hantar emel, padam fail, arahan shell, restart) sentiasa minta pengesahan anda di skrin.
+Di TETAPAN ada suis untuk setiap kumpulan kebolehan. Matikan apa yang anda tidak mahu Jarvis sentuh.
+Tindakan berisiko (hantar emel, padam atau alih fail, arahan shell, autopilot, restart) sentiasa minta pengesahan anda di skrin.
+Jarvis tidak menghantar mesej, menempah atau membayar tanpa anda.
 
 Privasi
 Jarvis berjalan di Mac anda. Suara anda, dan apa-apa yang Jarvis semak untuk menjawab (emel, kalendar, kenalan, tangkapan skrin),
 dihantar kepada Google Gemini menggunakan kunci API anda. Kos penggunaan Gemini ditanggung oleh akaun Google anda.
+Ingatan, tetapan dan watak disimpan dalam ~/Library/Application Support/Jarvis sahaja.
 
 Jarvis Mini
-Selepas dipasang, buka "Jarvis Mini" dari folder Applications anda untuk kepala kecil yang terapung di tepi skrin.
-Seret kepalanya untuk alih; butang x menutupnya. Jarvis utama mesti sedang berjalan.
+Selepas dipasang, buka "Jarvis Mini" dari folder Applications untuk kepala kecil yang terapung di tepi skrin.
+Seret kepalanya untuk alih; S/M/L tukar saiz; butang x menutupnya. Jarvis utama mesti sedang berjalan.
 
 Buang
 Dwiklik uninstall.command.
 
 ---
-ENGLISH: Right-click install.command > Open. Paste your own Gemini API key in TETAPAN (Settings), press SIMPAN (Save), then MULA (Start).
-To remove, run uninstall.command.
+ENGLISH
+Needs macOS 13+, Node.js 20+ and your own free Gemini API key. Double-click install.command
+(if macOS blocks it: System Settings > Privacy & Security > Open Anyway). When Jarvis opens, press TETAPAN (Settings),
+choose English, paste your Gemini key, press SAVE, then START, or just say "Hi Jarvis". To remove, run uninstall.command.
+Not available for Windows yet.

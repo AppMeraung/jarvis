@@ -6,6 +6,10 @@ Pembantu suara AI untuk Mac. Cakap dengan Jarvis, dan dia mengawal Mac anda: muz
 
 ## Pasang
 
+**Cara paling mudah:** muat turun [Jarvis.zip](https://github.com/AppMeraung/jarvis/releases/latest/download/Jarvis.zip), buka zip itu, dan dwiklik `install.command`. Jika macOS menyekatnya, buka System Settings > Privacy & Security dan tekan **Open Anyway**.
+
+**Atau melalui Terminal:**
+
 Tampal baris ini dalam app **Terminal**, kemudian tekan Enter:
 
 ```bash
