@@ -113,6 +113,21 @@ http.createServer((req, res) => {
     });
     return;
   }
+  if (req.method === 'POST' && charRoute?.[3] === 'rig') {   // the same model with bones (for example Hyper3D's base.glb)
+    const dir = charDir(charRoute[1]);
+    if (!dir || !fs.existsSync(dir)) return json(res, 404, { error: 'not found' });
+    const parts = [];
+    let size = 0;
+    req.on('data', c => { size += c.length; if (size > 200e6) req.destroy(); else parts.push(c); });
+    req.on('end', () => {
+      const glb = Buffer.concat(parts);
+      if (glb.subarray(0, 4).toString() !== 'glTF') return json(res, 400, { error: 'Fail mesti model .glb' });
+      fs.writeFileSync(path.join(dir, 'rig.glb'), glb);
+      tellPages();
+      json(res, 200, { result: 'ok' });
+    });
+    return;
+  }
   if ((req.method === 'POST' || req.method === 'DELETE') && charRoute && !charRoute[2]) {
     const dir = charDir(charRoute[1]);
     if (!dir || !fs.existsSync(dir)) return json(res, 404, { error: 'not found' });

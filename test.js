@@ -336,6 +336,8 @@ test('character data keeps only safe, bounded values', () => {
   assert.deepStrictEqual(cleanCharacter({ turn: -1.2, mouthStyle: 'pulse', idle: 'breeze', moves: { happy: 'salute', 'x y': 'z', sad: 5 } }),
     { turn: -1.2, mouthStyle: 'pulse', idle: 'breeze', moves: { happy: 'salute' } });
   assert.deepStrictEqual(cleanCharacter({ turn: 99, mouthStyle: 'big', moves: ['a'] }), {});
+  assert.deepStrictEqual(cleanCharacter({ limbs: [{ kind: 'ear', base: [0, 1, 0], tip: [0, 2, 0], x: 1 }, { kind: 'wing', base: [0, 0, 0], tip: [1, 1, 1] }, { kind: 'arm', base: [0, 1, 0] }] }),
+    { limbs: [{ kind: 'ear', base: [0, 1, 0], tip: [0, 2, 0] }] });
 });
 
 test('characters can be added, edited, listed, served and removed, and bad ids are refused', async () => {
@@ -354,6 +356,10 @@ test('characters can be added, edited, listed, served and removed, and bad ids a
     assert.deepStrictEqual(await fetch(url('/characters')).then(r => r.json()), [{ id, name: 'Kucing Biru', voice: 'Puck', pitch: 1.2 }]);
     assert.deepStrictEqual(Buffer.from(await fetch(url(`/characters/${id}/model.glb`)).then(r => r.arrayBuffer())), glb);
     assert.strictEqual((await fetch(url('/characters/..%2Fserver.js/model.glb'))).status, 404);
+    assert.strictEqual((await fetch(url(`/characters/${id}/rig.glb`), { method: 'POST', body: 'bukan glb' })).status, 400);
+    assert.strictEqual((await fetch(url(`/characters/${id}/rig.glb`), { method: 'POST', body: glb })).status, 200);
+    assert.strictEqual((await fetch(url('/characters')).then(r => r.json()))[0].rig, true);
+    assert.deepStrictEqual(Buffer.from(await fetch(url(`/characters/${id}/rig.glb`)).then(r => r.arrayBuffer())), glb);
     assert.strictEqual((await fetch(url('/characters/' + id), { method: 'DELETE' })).status, 200);
     assert.deepStrictEqual(await fetch(url('/characters')).then(r => r.json()), []);
   } finally {

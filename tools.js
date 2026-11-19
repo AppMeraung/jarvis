@@ -705,6 +705,10 @@ function cleanCharacter(c) {
   if (typeof c.turn === 'number' && Math.abs(c.turn) <= 7) out.turn = c.turn;                            // radians to face the camera
   if (['jaw', 'pulse', 'open'].includes(c.mouthStyle)) out.mouthStyle = c.mouthStyle;
   if (typeof c.idle === 'string' && c.idle.length <= 40) out.idle = c.idle;
+  if (Array.isArray(c.limbs)) {                                                                          // ears, arms, tail: base and tip
+    out.limbs = c.limbs.filter(l => l && ['ear', 'arm', 'tail'].includes(l.kind) && point(l.base) && point(l.tip))
+      .slice(0, 6).map(l => ({ kind: l.kind, base: l.base, tip: l.tip }));
+  }
   if (Array.isArray(c.heads)) {                                                                           // two faces on one body
     out.heads = c.heads.slice(0, 2).map(h => {
       const x = cleanCharacter(h), keep = {};

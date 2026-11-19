@@ -156,6 +156,9 @@ function buildPuppet(model, info, clips = []) {
     eyes: h.eyes || [], blinkAt: 1 + Math.random() * 3,
   }));
   const pair = f => [0, 1].map(i => heads[i] ? f(heads[i]) : f(null));
+  const centreX = (box.min.x + box.max.x) / 2;
+  // side: which way is "up" for this limb when it turns around the screen's axis (left limbs turn clockwise to rise).
+  const limbs = (info.limbs || []).slice(0, 6).map((l, i) => ({ ...l, side: Math.sign(l.base[0] - centreX) || 1, phase: i * 1.7, angle: 0 }));
   const v3 = p => new THREE.Vector3(...(p || far));
   const u = {
     uMouth: { value: pair(h => v3(h?.mouth)) }, uEyeA: { value: pair(h => v3(h?.eyes[0])) }, uEyeB: { value: pair(h => v3(h?.eyes[1])) },
@@ -163,6 +166,11 @@ function buildPuppet(model, info, clips = []) {
     uPulse: { value: pair(h => h ? h.pulse : 0) }, uGap: { value: pair(h => h ? h.gap : 0) },
     ...Object.fromEntries(['uOpen', 'uWide', 'uRound', 'uSmile', 'uBlinkA', 'uBlinkB', 'uWideEye', 'uLook', 'uBrow'].map(k => [k, { value: [0, 0] }])),
     uOrigin: { value: new THREE.Matrix4() },  // model space of the marks -> world, updated every frame
+    // Up to six limbs without bones (ears, arms, a tail): each bends around its base, by an angle set every frame.
+    uLimbBase: { value: [0, 1, 2, 3, 4, 5].map(i => v3(limbs[i]?.base)) }, uLimbTip: { value: [0, 1, 2, 3, 4, 5].map(i => v3(limbs[i]?.tip)) },
+    uLimbAngle: { value: [0, 0, 0, 0, 0, 0] },
+    // How thick each limb is, as a share of its length: arms are thin, so the body beside them stays still.
+    uLimbR: { value: [0, 1, 2, 3, 4, 5].map(i => ({ arm: .13, ear: .32, tail: .22 })[limbs[i]?.kind] || .2) },
   };
   model.traverse(o => {
     if (!o.isMesh) return;
@@ -172,6 +180,17 @@ function buildPuppet(model, info, clips = []) {
       sh.vertexShader = `uniform vec3 uMouth[2], uEyeA[2], uEyeB[2];
 uniform float uHalf[2], uEyeR[2], uOpen[2], uWide[2], uRound[2], uSmile[2], uBlinkA[2], uBlinkB[2], uWideEye[2], uLook[2], uBrow[2], uPulse[2], uGap[2];
 uniform mat4 uOrigin; varying float vGap, vLip;
+uniform vec3 uLimbBase[6], uLimbTip[6]; uniform float uLimbAngle[6], uLimbR[6];
+// Bend one limb: points along the base-to-tip line (and around the hand or ear tip) turn around the base.
+vec3 bend(vec3 wp, vec3 b, vec3 t, float a, float thick) {
+  vec3 axis = t - b; float L = length(axis);
+  if (L < 1e-4 || abs(a) < 1e-4) return vec3(0.0);
+  vec3 dir = axis / L, v = wp - b;
+  float s = dot(v, dir) / L, dist = length(wp - (b + dir * clamp(s, 0.0, 1.0) * L)), R = L * thick;
+  float w = smoothstep(0.0, 0.15, s) * (1.0 - smoothstep(R * 0.92, R * 1.05, dist));   // a sharp edge: the arm moves, the body does not
+  float c = cos(a * w), sn = sin(a * w);
+  return b + vec3(v.x * c - v.y * sn, v.x * sn + v.y * c, v.z) - wp;
+}
 vec3 eyeMove(vec3 wp, vec3 eye, float r, float blink, float wide, float look, float brow) {
   vec3 e = wp - eye;
   float L = length(e), g = 1.0 - smoothstep(0.0, r, L), iris = 1.0 - smoothstep(0.0, r * 0.5, L);
@@ -183,6 +202,7 @@ vec3 eyeMove(vec3 wp, vec3 eye, float r, float blink, float wide, float look, fl
 ` + sh.vertexShader.replace('#include <begin_vertex>', `vec3 transformed = vec3(position);
 {
   vec3 wp = (modelMatrix * vec4(position, 1.0)).xyz, d = vec3(0.0);
+  for (int k = 0; k < 6; k++) d += bend(wp, (uOrigin * vec4(uLimbBase[k], 1.0)).xyz, (uOrigin * vec4(uLimbTip[k], 1.0)).xyz, uLimbAngle[k], uLimbR[k]);
   vGap = 0.0; vLip = 0.0;
   for (int h = 0; h < 2; h++) {
     float hw = uHalf[h], R = hw * 1.7;
@@ -227,7 +247,7 @@ vec3 eyeMove(vec3 wp, vec3 eye, float r, float blink, float wide, float look, fl
     h.bone = bones.filter(b => /head/i.test(b.name)).sort((a, b) => worldOf(a).distanceTo(mouth) - worldOf(b).distanceTo(mouth))[0];
   });
   const arms = bones.filter(b => /arm|hand|frontfoot/i.test(b.name));
-  return { pivot, model, u, size, heads, mixer, idle, moves, bones, arms };
+  return { pivot, model, u, size, heads, mixer, idle, moves, bones, arms, limbs };
 }
 
 // ?mark=1: click the mouth, then each eye. The points are saved with the character.
@@ -236,7 +256,14 @@ if (MARK) {
   // Two heads (CatDog): the same four clicks for each head in turn.
   const many = +Q.get('heads') === 2;
   const one = ['HUJUNG KIRI mulut', 'HUJUNG KANAN mulut', 'tengah MATA pertama (atau tekan Siap jika tiada mata)', 'tengah MATA kedua (atau tekan Siap)'];
-  const steps = many ? [...one.map(x => 'KEPALA 1: klik ' + x), ...one.map(x => 'KEPALA 2: klik ' + x)] : one.map(x => 'Klik ' + x);
+  // Then, optional, two clicks for each ear and arm: where it joins the body, then its tip or hand. "Langkau" skips one.
+  const LIMBS = [['ear', 'TELINGA kiri'], ['ear', 'TELINGA kanan'], ['arm', 'TANGAN kiri'], ['arm', 'TANGAN kanan']];
+  const limbSteps = LIMBS.flatMap(([, n]) => [`Klik PANGKAL ${n} (tempat ia bercantum dengan badan), atau Langkau`, `Klik HUJUNG ${n}`]);
+  const onlyLimbs = Q.get('mark') === 'limbs';
+  const faceSteps = onlyLimbs ? [] : many ? [...one.map(x => 'KEPALA 1: klik ' + x), ...one.map(x => 'KEPALA 2: klik ' + x)] : one.map(x => 'Klik ' + x);
+  const steps = [...faceSteps, ...limbSteps];
+  const skip = Object.assign(document.createElement('button'), { textContent: 'Langkau', style: 'position:fixed;bottom:16px;left:calc(50% - 130px);font:600 15px system-ui;padding:8px 18px' });
+  document.body.append(skip);
   const done = Object.assign(document.createElement('button'), { textContent: 'Siap', style: 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);font:600 15px system-ui;padding:8px 22px' });
   document.body.append(note, done);
   const marks = [];
@@ -248,17 +275,33 @@ if (MARK) {
     return h;
   };
   const save = async () => {
-    if (marks.length < 2 || (many && marks.length < 6)) return;
-    let body = headOf(marks.slice(0, 4));
+    const limbs = LIMBS.map(([kind], i) => {
+      const b = marks[faceSteps.length + i * 2], t = marks[faceSteps.length + i * 2 + 1];
+      return b && t ? { kind, base: b, tip: t } : null;
+    }).filter(Boolean);
+    if (onlyLimbs) {
+      await fetch('/characters/' + encodeURIComponent(CHAR), { method: 'POST', body: JSON.stringify({ limbs }) });
+      note.textContent = 'Disimpan. Tutup tetingkap ini.';
+      return done.remove();
+    }
+    if (!marks[0] || !marks[1] || (many && (!marks[4] || !marks[5]))) return;
+    let body = { ...headOf(marks.slice(0, 4).filter(Boolean)), limbs };
     if (many) {
       const old = ((await fetch('/characters').then(r => r.json())).find(c => c.id === CHAR) || {}).heads || [];
-      body = { heads: [{ ...old[0], ...body }, { ...old[1], ...headOf(marks.slice(4, 8)) }] };
+      body = { limbs, heads: [{ ...old[0], ...headOf(marks.slice(0, 4).filter(Boolean)) }, { ...old[1], ...headOf(marks.slice(4, 8).filter(Boolean)) }] };
     }
     await fetch('/characters/' + encodeURIComponent(CHAR), { method: 'POST', body: JSON.stringify(body) });
     note.textContent = 'Disimpan. Tutup tetingkap ini.';
     done.remove();
   };
   done.onclick = save;
+  const next = () => { if (marks.length >= steps.length) save(); else note.textContent = steps[marks.length]; };
+  skip.onclick = () => {   // a skipped limb base skips its tip too
+    const i = marks.length;
+    marks.push(null);
+    if (i >= faceSteps.length && (i - faceSteps.length) % 2 === 0) marks.push(null);
+    next();
+  };
   renderer.domElement.onclick = e => {
     if (!puppet) return;
     const ray = new THREE.Raycaster();
@@ -269,7 +312,7 @@ if (MARK) {
     const dot = new THREE.Mesh(new THREE.SphereGeometry(puppet.size.y * .006), new THREE.MeshBasicMaterial({ color: 0xff3366 }));
     dot.position.copy(hit.point);
     scene.add(dot);
-    if (marks.length === steps.length) save(); else note.textContent = steps[marks.length];
+    next();
   };
 }
 
@@ -462,6 +505,26 @@ renderer.setAnimationLoop(ms => {
       u.uBrow.value[i] = calm ? (M === 'thinking' || M === 'confused' || M === 'surprised' ? 1 : talking ? 0 : .35) : now.browRaise * .5;
     });
     u.uOrigin.value.copy(puppet.model.matrixWorld);
+    // Limbs. Ears perk up when surprised, excited or listening, wiggle when happy and droop when sad. Arms gesture
+    // with the rhythm of speech, rise when excited, wave when happy, droop when sad, and one lifts to the chin when thinking.
+    puppet.limbs.forEach((l, j) => {
+      let a = 0;
+      if (l.kind === 'ear') {
+        a = (M === 'surprised' || M === 'excited' ? .35 : state.listening ? .15 : M === 'sad' ? -.35 : 0)
+          + (M === 'happy' || M === 'excited' ? Math.sin(t * 9 + l.phase) * .12 : 0) + Math.sin(t * 1.3 + l.phase) * .03 + speech * .08 * Math.sin(beat);
+      } else if (l.kind === 'tail') {
+        a = Math.sin(t * (M === 'happy' || M === 'excited' ? 12 : 2)) * (M === 'happy' || M === 'excited' ? .45 : M === 'sad' ? .03 : .12);
+      } else {
+        const first = j === puppet.limbs.findIndex(x => x.kind === 'arm');
+        // shortcut: small angles only, a model without elbow or shoulder joints smears when bent far; a rigged model can do more
+        a = speech * (.06 + .1 * Math.abs(Math.sin(beat * .5 + l.phase)))                   // talking with the hands
+          + (M === 'excited' ? .32 + Math.sin(t * 7 + l.phase) * .08 : 0)
+          + (M === 'happy' && first ? .22 + Math.sin(t * 6) * .12 : 0)                         // a little wave
+          + (M === 'thinking' && first ? .35 : 0) + (M === 'sad' ? -.06 : 0) + Math.sin(t * 1.1 + l.phase) * .02;
+      }
+      l.angle += (a - l.angle) * .15;
+      u.uLimbAngle.value[j] = l.angle * l.side;
+    });
     // Bones: the talking head nods with the words and tilts with the mood; the listener turns a little towards it.
     const turnTo = new THREE.Quaternion(), e = new THREE.Euler();
     puppet.heads.forEach((h, i) => {
