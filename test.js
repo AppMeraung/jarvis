@@ -483,3 +483,23 @@ test('autopilot worker: the project is read only and dangerous commands are deni
   assert.throws(() => plan('agent_reply', { session: '../x', message: 'hi' }));
   assert.ok(plan('agent_start', { folder: __dirname, task: 'a; rm -rf ~' })[1].includes('a; rm -rf ~'));
 });
+
+test('Mac audio keeps only the shared sound, and refuses a share without sound', async () => {
+  const page = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const grab = new Function(page.match(/async function grabMacAudio[\s\S]*?\n}\n/)[0] + 'return grabMacAudio;')();
+  const track = kind => ({ kind, stopped: false, stop() { this.stopped = true; } });
+  const fake = tracks => ({ asked: null, async getDisplayMedia(c) { this.asked = c; return {
+    getTracks: () => tracks, getVideoTracks: () => tracks.filter(t => t.kind === 'video'), getAudioTracks: () => tracks.filter(t => t.kind === 'audio') }; } });
+
+  const withSound = [track('video'), track('audio')], media = fake(withSound);
+  const s = await grab(media);
+  assert.strictEqual(media.asked.systemAudio, 'include');
+  assert.strictEqual(media.asked.audio.restrictOwnAudio, true);   // Jarvis's own voice is left out where Chrome supports it
+  assert.ok(withSound[0].stopped, 'the picture is stopped');
+  assert.ok(!withSound[1].stopped, 'the sound keeps running');
+  assert.strictEqual(s.getAudioTracks().length, 1);
+
+  const silent = [track('video')];
+  await assert.rejects(grab(fake(silent)), /Entire Screen/);
+  assert.ok(silent.every(t => t.stopped), 'a share without sound is closed');
+});
