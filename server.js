@@ -38,7 +38,7 @@ function characters() {
   return ids.filter(id => fs.existsSync(path.join(CHARS, id, 'model.glb'))).map(id => {
     let data = {};
     try { data = JSON.parse(fs.readFileSync(path.join(CHARS, id, 'character.json'), 'utf8')); } catch {}
-    return { id, name: id, ...cleanCharacter(data) };
+    return { id, name: id, ...cleanCharacter(data), ...(fs.existsSync(path.join(CHARS, id, 'rig.glb')) ? { rig: true } : {}) };
   });
 }
 const tellPages = () => { for (const page of pages) page.write('event: settings\ndata: 1\n\n'); };
@@ -86,13 +86,14 @@ http.createServer((req, res) => {
     });
     return;
   }
-  const charRoute = route.match(/^\/characters\/([^/]+)(\/model\.glb)?$/);
+  const charRoute = route.match(/^\/characters\/([^/]+)(\/(model|rig)\.glb)?$/);   // rig.glb: the same model with bones
   if (req.method === 'GET' && route === '/characters') return json(res, 200, characters());
   if (req.method === 'GET' && charRoute?.[2]) {
     const dir = charDir(charRoute[1]);
-    if (!dir || !fs.existsSync(path.join(dir, 'model.glb'))) return json(res, 404, { error: 'not found' });
+    const glb = dir && path.join(dir, charRoute[3] + '.glb');
+    if (!glb || !fs.existsSync(glb)) return json(res, 404, { error: 'not found' });
     res.writeHead(200, { 'content-type': 'model/gltf-binary' });
-    return fs.createReadStream(path.join(dir, 'model.glb')).pipe(res);
+    return fs.createReadStream(glb).pipe(res);
   }
   if (req.method === 'POST' && route === '/characters') {   // body: the .glb file itself; ?name= its name
     const name = new URL(req.url, 'http://x').searchParams.get('name') || 'Watak';

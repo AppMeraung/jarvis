@@ -48,12 +48,13 @@ const Q = new URLSearchParams(location.search), NET = Q.has('net');
 // ?c=<id> shows a character the user added. ?mark=1 lets the user click its mouth and eyes once.
 const CHAR = Q.get('c'), MARK = Q.has('mark');
 
-const state = { mood: 'neutral', intensity: 1, listening: false, level: 0, bright: .5 };
+const state = { mood: 'neutral', intensity: 1, listening: false, level: 0, bright: .5, speaker: 0 };
 window.FacePoly = {
   expressions: Object.keys(MOOD),
   react({ emotion, intensity = 1 } = {}) { if (MOOD[emotion]) state.mood = emotion; state.intensity = +intensity || 1; },
   setExpression(name) { if (MOOD[name]) state.mood = name; },
   setListening(on) { state.listening = !!on; },
+  setSpeaker(i) { state.speaker = Math.max(0, Math.min(1, +i || 0)); },   // which of two heads talks (CatDog)
   // A picture of the face as it is now (WebGL pages cannot be screenshotted from outside), used to check faces by eye.
   snapshot() { renderer.render(scene, camera); return renderer.domElement.toDataURL('image/png'); },
   // level = loudness 0..1, bright = how high-pitched the sound is 0..1 (bright "i/e", dark "o/u")
@@ -74,7 +75,21 @@ new GLTFLoader().load(CHAR ? `/characters/${encodeURIComponent(CHAR)}/model.glb`
   gltf.scene.traverse(o => { if (o.morphTargetDictionary?.jawOpen !== undefined) mesh = o; if (o.name === 'Head') head = o; });
   if (!mesh) {                                // a model without face controls: the face is moved by the shader instead
     const info = (await fetch('/characters').then(r => r.json()).catch(() => [])).find(c => c.id === CHAR) || {};
-    puppet = buildPuppet(gltf.scene, info, gltf.animations);
+    // rig.glb is the same model with bones but plain colours: keep its bones, take the colours from model.glb.
+    let body = gltf.scene, clips = gltf.animations;
+    if (info.rig && !MARK) {
+      try {
+        const rig = await new GLTFLoader().loadAsync(`/characters/${encodeURIComponent(CHAR)}/rig.glb`);
+        let painted, skinned;
+        gltf.scene.traverse(o => { if (o.isMesh) painted ||= o; });
+        rig.scene.traverse(o => { if (o.isSkinnedMesh) skinned ||= o; });
+        if (painted && skinned && painted.geometry.attributes.position.count === skinned.geometry.attributes.position.count) {
+          skinned.material = painted.material;
+          body = rig.scene; clips = rig.animations;
+        }
+      } catch {}
+    }
+    puppet = buildPuppet(body, info, clips);
     head = puppet.pivot;
     fit = puppet.size;
     scene.add(puppet.pivot);
@@ -132,17 +147,21 @@ function buildPuppet(model, info, clips = []) {
     idle = mixer.clipAction(byName(info.idle) || clips.find(c => /idle|breeze|breath|stand/i.test(c.name)) || clips[0]).play();
     for (const [mood, name] of Object.entries(info.moves || {})) if (byName(name)) moves[mood] = mixer.clipAction(byName(name));
   }
-  // size = half the mouth's width (from the two corners the user clicked); the cheeks around it move too.
-  const half = info.size || Math.max(size.x, size.y, size.z) * .05, R = half * 1.7;
-  const eyeR = info.eyeSize || half * 1.2;
+  // One face, or two on one body (CatDog). Each head has its own mouth (size = half its width), eyes and personality:
+  // style "calm" smiles small and raises an eyebrow; "lively" laughs open and widens its eyes.
+  const far = [1e6, 1e6, 1e6], fallback = Math.max(size.x, size.y, size.z) * .05;
+  const heads = (info.heads?.length ? info.heads : [info]).slice(0, 2).map(h => ({
+    name: h.name, style: h.style || 'lively', mouth: h.mouth, half: h.size || fallback, eyeR: h.eyeSize || (h.size || fallback) * 1.2,
+    pulse: (h.mouthStyle || info.mouthStyle) === 'pulse' ? 1 : 0, gap: (h.mouthStyle || info.mouthStyle) ? 0 : 1,
+    eyes: h.eyes || [], blinkAt: 1 + Math.random() * 3,
+  }));
+  const pair = f => [0, 1].map(i => heads[i] ? f(heads[i]) : f(null));
+  const v3 = p => new THREE.Vector3(...(p || far));
   const u = {
-    uMouth: { value: new THREE.Vector3(...(info.mouth || [1e6, 1e6, 1e6])) },
-    uEye0: { value: new THREE.Vector3(...(info.eyes?.[0] || [1e6, 1e6, 1e6])) },
-    uEye1: { value: new THREE.Vector3(...(info.eyes?.[1] || [1e6, 1e6, 1e6])) },
-    uR: { value: R }, uHalf: { value: half }, uEyeR: { value: eyeR }, uOpen: { value: 0 }, uWide: { value: 0 }, uRound: { value: 0 }, uSmile: { value: 0 },
-    uBlink0: { value: 0 }, uBlink1: { value: 0 }, uWideEye: { value: 0 }, uLook: { value: 0 },
-    uPulse: { value: info.mouthStyle === 'pulse' ? 1 : 0 },   // a trumpet or round mouth widens instead of dropping a jaw
-    uGap: { value: info.mouthStyle ? 0 : 1 },                // a mouth sculpted open already has its own teeth, so no painted gap
+    uMouth: { value: pair(h => v3(h?.mouth)) }, uEyeA: { value: pair(h => v3(h?.eyes[0])) }, uEyeB: { value: pair(h => v3(h?.eyes[1])) },
+    uHalf: { value: pair(h => h ? h.half : 1e-3) }, uEyeR: { value: pair(h => h ? h.eyeR : 1e-3) },
+    uPulse: { value: pair(h => h ? h.pulse : 0) }, uGap: { value: pair(h => h ? h.gap : 0) },
+    ...Object.fromEntries(['uOpen', 'uWide', 'uRound', 'uSmile', 'uBlinkA', 'uBlinkB', 'uWideEye', 'uLook', 'uBrow'].map(k => [k, { value: [0, 0] }])),
     uOrigin: { value: new THREE.Matrix4() },  // model space of the marks -> world, updated every frame
   };
   model.traverse(o => {
@@ -150,35 +169,38 @@ function buildPuppet(model, info, clips = []) {
     o.frustumCulled = false;
     for (const mat of [o.material].flat()) mat.onBeforeCompile = sh => {
       Object.assign(sh.uniforms, u);
-      sh.vertexShader = `uniform vec3 uMouth, uEye0, uEye1; uniform float uR, uHalf, uEyeR, uOpen, uWide, uRound, uSmile, uBlink0, uBlink1, uWideEye, uLook, uPulse, uGap;
+      sh.vertexShader = `uniform vec3 uMouth[2], uEyeA[2], uEyeB[2];
+uniform float uHalf[2], uEyeR[2], uOpen[2], uWide[2], uRound[2], uSmile[2], uBlinkA[2], uBlinkB[2], uWideEye[2], uLook[2], uBrow[2], uPulse[2], uGap[2];
 uniform mat4 uOrigin; varying float vGap, vLip;
-vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
+vec3 eyeMove(vec3 wp, vec3 eye, float r, float blink, float wide, float look, float brow) {
   vec3 e = wp - eye;
-  float g = 1.0 - smoothstep(0.0, uEyeR, length(e));
-  float iris = 1.0 - smoothstep(0.0, uEyeR * 0.5, length(e));
+  float L = length(e), g = 1.0 - smoothstep(0.0, r, L), iris = 1.0 - smoothstep(0.0, r * 0.5, L);
   float lid = e.y > 0.0 ? 1.0 : 0.35;                     // the upper lid travels further than the lower
-  return vec3(uLook * iris * uEyeR * 0.2,                    // the iris looks left and right
-              -e.y * g * blink * lid + e.y * g * uWideEye * 0.6, 0.0);   // squeeze shut, or open wide
+  float browZone = (1.0 - smoothstep(r * 0.7, r * 1.9, L)) * step(0.0, e.y);   // the skin above the eye
+  return vec3(look * iris * r * 0.22,                      // the iris looks left and right
+              -e.y * g * blink * lid + e.y * g * wide * 0.6 + browZone * brow * r * 0.4, 0.0);
 }
 ` + sh.vertexShader.replace('#include <begin_vertex>', `vec3 transformed = vec3(position);
 {
-  vec3 wp = (modelMatrix * vec4(position, 1.0)).xyz;
-  vec3 mouth = (uOrigin * vec4(uMouth, 1.0)).xyz, m = wp - mouth;
-  float f = 1.0 - smoothstep(0.0, uR, length(m));
-  float below = step(m.y, 0.0), side = abs(m.x) / uR;
-  vec3 d = vec3(0.0);
-  float jaw = 1.0 - uPulse;
-  d.y -= jaw * f * below * uOpen * uHalf * (0.4 + 0.5 * uGap);   // jaw and lower lip drop
-  d.y += jaw * f * (1.0 - below) * uOpen * uHalf * 0.15;  // upper lip lifts a little
-  d += uPulse * m * f * uOpen * 0.7;                      // or the whole mouth widens outwards
-  d.x += m.x * f * (uWide - uRound * 0.8) * 0.45;         // "i/e" stretch, "o/u" purse
-  d.z += f * uRound * uR * 0.15;                          // lips push forward for "o/u"
-  d.y += f * uSmile * uR * 0.3 * side;                    // corners up for a smile, down for a frown
-  // The dark opening: as wide as the mouth itself, a thin band along the lip line that the jaw drop stretches open.
-  vGap = uGap * uOpen * (1.0 - smoothstep(uHalf * 0.6, uHalf * 1.05, abs(m.x))) * (1.0 - smoothstep(0.0, uHalf * 0.3, abs(m.y)));
-  vLip = clamp(m.y / (uHalf * 0.3), -1.0, 1.0);          // across the opening: +1 upper lip, -1 lower lip
-  d += eyeMove(wp, (uOrigin * vec4(uEye0, 1.0)).xyz, uBlink0);
-  d += eyeMove(wp, (uOrigin * vec4(uEye1, 1.0)).xyz, uBlink1);
+  vec3 wp = (modelMatrix * vec4(position, 1.0)).xyz, d = vec3(0.0);
+  vGap = 0.0; vLip = 0.0;
+  for (int h = 0; h < 2; h++) {
+    float hw = uHalf[h], R = hw * 1.7;
+    vec3 m = wp - (uOrigin * vec4(uMouth[h], 1.0)).xyz;
+    float f = 1.0 - smoothstep(0.0, R, length(m));
+    float below = step(m.y, 0.0), side = abs(m.x) / R, jaw = 1.0 - uPulse[h];
+    d.y -= jaw * f * below * uOpen[h] * hw * (0.6 + 0.5 * uGap[h]);   // jaw and lower lip drop
+    d.y += jaw * f * (1.0 - below) * uOpen[h] * hw * 0.15;           // upper lip lifts a little
+    d += uPulse[h] * m * f * uOpen[h] * 0.7;                         // or a round mouth widens outwards
+    d.x += m.x * f * (uWide[h] - uRound[h] * 0.8) * 0.45;            // "i/e" stretch, "o/u" purse
+    d.z += f * uRound[h] * R * 0.15;                                  // lips push forward for "o/u"
+    d.y += f * uSmile[h] * R * 0.3 * side;                            // corners up for a smile, down for a frown
+    // The dark opening: as wide as the mouth itself, a thin band along the lip line that the jaw drop stretches open.
+    float g = uGap[h] * uOpen[h] * (1.0 - smoothstep(hw * 0.6, hw * 1.05, abs(m.x))) * (1.0 - smoothstep(0.0, hw * 0.3, abs(m.y)));
+    if (g > vGap) { vGap = g; vLip = clamp(m.y / (hw * 0.3), -1.0, 1.0); }
+    d += eyeMove(wp, (uOrigin * vec4(uEyeA[h], 1.0)).xyz, uEyeR[h], uBlinkA[h], uWideEye[h], uLook[h], uBrow[h]);
+    d += eyeMove(wp, (uOrigin * vec4(uEyeB[h], 1.0)).xyz, uEyeR[h], uBlinkB[h], uWideEye[h], uLook[h], uBrow[h] * 0.2);   // one eyebrow goes up
+  }
   transformed += inverse(mat3(modelMatrix)) * d;
 }`);
       // Inside the open mouth: a row of upper teeth, a dark throat, and the tongue at the bottom.
@@ -193,22 +215,45 @@ vec3 eyeMove(vec3 wp, vec3 eye, float blink) {
 }`);
     };
   });
-  return { pivot, model, u, size, marked: !!info.mouth, mixer, idle, moves };
+  // Bones the face can move by itself: each head nods and tilts, arms sway while talking. Rest poses are kept to add to.
+  const bones = [];
+  model.traverse(o => { if (o.isBone) bones.push(o); });
+  for (const b of bones) b.userData.rest = b.quaternion.clone();
+  const worldOf = b => b.getWorldPosition(new THREE.Vector3());
+  pivot.updateMatrixWorld(true);
+  heads.forEach(h => {   // the head bone nearest to this head's mouth
+    if (!h.mouth) return;
+    const mouth = model.localToWorld(new THREE.Vector3(...h.mouth));
+    h.bone = bones.filter(b => /head/i.test(b.name)).sort((a, b) => worldOf(a).distanceTo(mouth) - worldOf(b).distanceTo(mouth))[0];
+  });
+  const arms = bones.filter(b => /arm|hand|frontfoot/i.test(b.name));
+  return { pivot, model, u, size, heads, mixer, idle, moves, bones, arms };
 }
 
 // ?mark=1: click the mouth, then each eye. The points are saved with the character.
 if (MARK) {
   const note = Object.assign(document.createElement('div'), { style: 'position:fixed;top:12px;left:0;right:0;text-align:center;font:600 15px system-ui;color:#fff;text-shadow:0 1px 4px #000' });
-  const steps = ['Klik HUJUNG KIRI mulut watak', 'Klik HUJUNG KANAN mulut', 'Klik tengah MATA pertama (atau tekan Siap jika tiada mata)', 'Klik tengah MATA kedua (atau tekan Siap)'];
+  // Two heads (CatDog): the same four clicks for each head in turn.
+  const many = +Q.get('heads') === 2;
+  const one = ['HUJUNG KIRI mulut', 'HUJUNG KANAN mulut', 'tengah MATA pertama (atau tekan Siap jika tiada mata)', 'tengah MATA kedua (atau tekan Siap)'];
+  const steps = many ? [...one.map(x => 'KEPALA 1: klik ' + x), ...one.map(x => 'KEPALA 2: klik ' + x)] : one.map(x => 'Klik ' + x);
   const done = Object.assign(document.createElement('button'), { textContent: 'Siap', style: 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);font:600 15px system-ui;padding:8px 22px' });
   document.body.append(note, done);
   const marks = [];
   note.textContent = steps[0];
+  const headOf = list => {
+    const [l, r] = list.map(p => new THREE.Vector3(...p)), eyes = list.slice(2);
+    const h = { mouth: l.clone().add(r).multiplyScalar(.5).toArray(), size: l.distanceTo(r) / 2, eyes };
+    if (eyes.length === 2) h.eyeSize = new THREE.Vector3(...eyes[0]).distanceTo(new THREE.Vector3(...eyes[1])) * .3;
+    return h;
+  };
   const save = async () => {
-    if (marks.length < 2) return;
-    const [l, r] = marks.map(p => new THREE.Vector3(...p)), eyes = marks.slice(2);
-    const body = { mouth: l.clone().add(r).multiplyScalar(.5).toArray(), size: l.distanceTo(r) / 2, eyes };
-    if (eyes.length === 2) body.eyeSize = new THREE.Vector3(...eyes[0]).distanceTo(new THREE.Vector3(...eyes[1])) * .3;
+    if (marks.length < 2 || (many && marks.length < 6)) return;
+    let body = headOf(marks.slice(0, 4));
+    if (many) {
+      const old = ((await fetch('/characters').then(r => r.json())).find(c => c.id === CHAR) || {}).heads || [];
+      body = { heads: [{ ...old[0], ...body }, { ...old[1], ...headOf(marks.slice(4, 8)) }] };
+    }
     await fetch('/characters/' + encodeURIComponent(CHAR), { method: 'POST', body: JSON.stringify(body) });
     note.textContent = 'Disimpan. Tutup tetingkap ini.';
     done.remove();
@@ -224,7 +269,7 @@ if (MARK) {
     const dot = new THREE.Mesh(new THREE.SphereGeometry(puppet.size.y * .006), new THREE.MeshBasicMaterial({ color: 0xff3366 }));
     dot.position.copy(hit.point);
     scene.add(dot);
-    if (marks.length === 4) save(); else note.textContent = steps[marks.length];
+    if (marks.length === steps.length) save(); else note.textContent = steps[marks.length];
   };
 }
 
@@ -338,7 +383,11 @@ function buildNet() {
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight || 1;
-  if (fit) camera.position.z = Math.max(fit.y, fit.x / camera.aspect) * (NET ? TUNE.z : puppet ? 1.9 : 2.1);   // whole bust visible at any window shape
+  if (fit) camera.position.z = Math.max(fit.y, fit.x / camera.aspect) * (NET ? TUNE.z : 2.1);   // whole bust visible at any window shape
+  if (fit && puppet) {   // a character: a sphere around the whole body fits inside the narrower field of view, so nothing is cut
+    const half = Math.min(15, THREE.MathUtils.radToDeg(Math.atan(Math.tan(THREE.MathUtils.degToRad(15)) * camera.aspect)));
+    camera.position.z = Math.hypot(fit.x, fit.y, fit.z * .6) / 2 / Math.sin(THREE.MathUtils.degToRad(half)) * 1.02;
+  }
   // The far side of the web fades into the dark, so the near side's nose, lips and chin read as a face.
   if (NET && fit) scene.fog = new THREE.Fog(0x000000, camera.position.z - fit.z * .2, camera.position.z + fit.z * .9);
   camera.updateProjectionMatrix();
@@ -349,7 +398,7 @@ resize();
 const tint = new THREE.Color(), target = new THREE.Color(), hue = new THREE.Color(0x55d0ff), want = new THREE.Color();
 const now = Object.fromEntries(KEYS.map(k => [k, 0]));
 const mouth = MORPHS.map(() => 0);
-let shownMood = 'neutral', lastT = 0, speech = 0, blinkAt = 2, lastLevel = 0, saccade = 0, glance = 0, gaze = 0;
+let beat = 0, beatT = 0, shownMood = 'neutral', lastT = 0, speech = 0, blinkAt = 2, lastLevel = 0, saccade = 0, glance = 0, gaze = 0;
 const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
 
 renderer.setAnimationLoop(ms => {
@@ -360,7 +409,13 @@ renderer.setAnimationLoop(ms => {
   // Mouth shape from the sound: a bright sound slides from "a" towards "e" and "i", a dark one towards "o" and "u",
   // and loudness says how far the shape is formed. Between syllables the level drops and the lips close.
   speech += (state.level - speech) * .45;
-  const b = state.bright, amount = Math.min(1, speech * 2.2);
+  // Real speech opens and closes the mouth several times a second. Loud audio alone would hold it open, so a syllable
+  // beat (about 6 a second, a little irregular) chews the opening while there is sound; pauses close the lips.
+  const dt = Math.min(.05, t - (beatT || t));
+  beatT = t;
+  beat += dt * (5.2 + Math.sin(t * 1.7) * 1.3) * Math.PI * 2 * (speech > .04 ? 1 : 0);
+  const chew = speech > .04 ? .45 + .55 * Math.abs(Math.sin(beat)) : 1;
+  const b = state.bright, amount = Math.min(1, speech * 2.2) * chew;
   const shape = b > .5 ? mix(mix(VISEME.A, VISEME.E, Math.min(1, (b - .5) * 4)), VISEME.I, Math.max(0, (b - .75) * 4))
                        : mix(mix(VISEME.A, VISEME.O, Math.min(1, (.5 - b) * 4)), VISEME.U, Math.max(0, (.25 - b) * 4));
   if (state.level > lastLevel + .15) glance = (Math.random() - .5) * .1;      // a new syllable nudges the head, as people do
@@ -386,16 +441,40 @@ renderer.setAnimationLoop(ms => {
     else face[name] = v;
   });
   if (puppet) {                               // the same face controls drive the shader-moved face
-    const u = puppet.u;
-    u.uOpen.value = face.jawOpen;
-    u.uWide.value = face.mouthWide;
-    u.uRound.value = face.mouthPucker;
-    u.uSmile.value = face.mouthSmile - face.mouthFrown;
-    u.uBlink0.value = Math.min(1, face.eyeBlinkLeft + now.squint);   // cartoon eyes react twice as much
-    u.uBlink1.value = Math.min(1, face.eyeBlinkRight + now.squint);
-    u.uLook.value = gaze;
-    u.uWideEye.value = Math.max(0, face.browRaise - face.eyeBlinkLeft) * (state.mood === 'surprised' || state.mood === 'excited' ? 1 : .3);
+    const u = puppet.u, M = state.mood;
+    puppet.heads.forEach((h, i) => {
+      const talking = i === state.speaker % puppet.heads.length, calm = h.style === 'calm';
+      if (t > h.blinkAt) h.blinkAt = t + .16 + (Math.random() < .2 ? .25 : 2 + Math.random() * 4);   // each head blinks on its own
+      const own = h.blinkAt - t < .16 ? Math.sin((h.blinkAt - t) / .16 * Math.PI) : 0;
+      // The talking head gets the spoken mouth; the other listens with a relaxed mouth that only shows the mood.
+      const react = talking ? 1 : .6, laugh = !calm && (M === 'happy' || M === 'excited') ? .35 : 0;
+      u.uOpen.value[i] = talking ? face.jawOpen + laugh * .5 : now.jawOpen * .3 + laugh * .6 * (M === 'excited' ? 1 : .4);
+      u.uWide.value[i] = talking ? face.mouthWide : now.mouthWide * react;
+      u.uRound.value[i] = talking ? face.mouthPucker : 0;
+      u.uSmile.value[i] = (now.mouthSmile - now.mouthFrown) * react * (calm ? .55 : 1.2);   // a smirk, or a wide grin
+      const squint = now.squint * (calm ? 1.3 : .8);
+      u.uBlinkA.value[i] = Math.min(1, Math.max(own, squint));
+      u.uBlinkB.value[i] = Math.min(1, Math.max(own, squint, now.wink));
+      u.uWideEye.value[i] = Math.max(0, now.browRaise - squint) * (M === 'surprised' || M === 'excited' ? (calm ? .7 : 1.3) : .3);
+      // The listener glances at the one speaking; the speaker looks out at the user.
+      const other = puppet.heads[1 - i];
+      u.uLook.value[i] = !talking && other?.mouth && h.mouth ? Math.sign(other.mouth[0] - h.mouth[0]) * .9 : gaze;
+      u.uBrow.value[i] = calm ? (M === 'thinking' || M === 'confused' || M === 'surprised' ? 1 : talking ? 0 : .35) : now.browRaise * .5;
+    });
     u.uOrigin.value.copy(puppet.model.matrixWorld);
+    // Bones: the talking head nods with the words and tilts with the mood; the listener turns a little towards it.
+    const turnTo = new THREE.Quaternion(), e = new THREE.Euler();
+    puppet.heads.forEach((h, i) => {
+      if (!h.bone) return;
+      const talking = i === state.speaker % puppet.heads.length, calm = h.style === 'calm';
+      h.tilt = (h.tilt || 0) + (((M === 'sad' ? .25 : M === 'thinking' || M === 'confused' ? (calm ? .2 : .12) : 0) + (talking ? 0 : (calm ? .1 : .05))) - (h.tilt || 0)) * .05;
+      e.set(talking ? speech * .1 * Math.sin(beat * .5) : Math.sin(t * .7 + i) * .03, (talking ? 0 : .12) * (i ? -1 : 1), h.tilt);
+      h.bone.quaternion.copy(h.bone.userData.rest).multiply(turnTo.setFromEuler(e));
+    });
+    puppet.arms.forEach((b, j) => {
+      e.set(0, 0, speech * .25 * Math.sin(beat * .5 + j) + (state.mood === 'excited' ? Math.sin(t * 6 + j) * .15 : 0));
+      b.quaternion.copy(b.userData.rest).multiply(turnTo.setFromEuler(e));
+    });
   }
 
   const ease = .06, r = head.rotation;
@@ -418,7 +497,11 @@ renderer.setAnimationLoop(ms => {
     net.sparks.position.y = Math.sin(t * .4) * .01;
   } else if (puppet) {
     // A cartoon has a body: it bobs and squashes a little with each syllable.
-    puppet.pivot.position.y = speech * fit.y * .015;
+    puppet.pivot.position.y = speech * fit.y * .015 * chew;
+    puppet.pivot.rotation.x = speech * .035 * Math.sin(beat * .5);   // a small nod with the rhythm of the words
+    const sp = puppet.heads[state.speaker % puppet.heads.length];
+    const eager = puppet.heads.length > 1 && sp.style !== 'calm' && (state.mood === 'happy' || state.mood === 'excited') ? 1 : 0;
+    puppet.pivot.rotation.z += ((sp.mouth ? -Math.sign(sp.mouth[0]) : 0) * .05 * eager - puppet.pivot.rotation.z) * .05;   // leans in, eager
     if (puppet.mixer) {
       if (state.mood !== shownMood) {         // a new mood plays its move once, then the calm loop returns
         const move = puppet.moves[state.mood];

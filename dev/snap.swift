@@ -9,8 +9,9 @@ let args = CommandLine.arguments
 let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
 // Nearly invisible but on screen: a hidden window would stop the page from drawing.
-let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
-let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 600, height: 600))
+let W = Double(ProcessInfo.processInfo.environment["SNAP_W"] ?? "600")!, H = Double(ProcessInfo.processInfo.environment["SNAP_H"] ?? "600")!
+let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: W, height: H), styleMask: [.borderless], backing: .buffered, defer: false)
+let web = WKWebView(frame: NSRect(x: 0, y: 0, width: W, height: H))
 win.contentView = web
 win.alphaValue = 0.02
 win.level = .floating
@@ -31,7 +32,10 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
   shot("-rest") {
     web.evaluateJavaScript("setInterval(() => window.FacePoly.setSpeechLevel(1, .5), 30); window.FacePoly.ready") { r, _ in
       print("ready", r ?? "nil")
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { shot("-open") { exit(0) } }
+      // SNAP_FRAMES=n also saves n pictures 90 ms apart while speaking, to see the mouth move.
+      let n = Int(ProcessInfo.processInfo.environment["SNAP_FRAMES"] ?? "0") ?? 0
+      func frames(_ i: Int) { if i >= n { exit(0) }; DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { shot("-f\(i)") { frames(i + 1) } } }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { shot("-open") { frames(0) } }
     }
   }
 }

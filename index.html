@@ -391,7 +391,8 @@ const RULES = `Guna alat yang diberi untuk mengawal Mac: aplikasi, volume, muzik
 - Wajah anda boleh tunjuk emosi. Panggil set_expression bila emosi perbualan berubah: happy bila gembira atau berjaya, excited bila ada berita baik, angry bila ada masalah serius, thinking bila sedang menyemak, confused bila tidak pasti, surprised, sad, wink bila bergurau, atau neutral.`;
 // The call name is free text from the settings box: keep letters, digits and spaces so it cannot rewrite the rules.
 const callName = () => (S.call || '').replace(/[^\p{L}\p{N} ]/gu, '').trim().slice(0, 30) || 'Tuan';
-const persona = () => character()?.persona ? `Watak anda sekarang: "${character().name}". ${character().persona} Kekal dalam watak ini sepanjang perbualan, tetapi tetap ikut semua peraturan di atas.\n` : '';
+const persona = () => (character()?.persona ? `Watak anda sekarang: "${character().name}". ${character().persona} Kekal dalam watak ini sepanjang perbualan, tetapi tetap ikut semua peraturan di atas.\n` : '')
+  + (heads() ? `Watak ini ada ${heads().length} kepala pada satu badan: ${heads().map(h => h.name).join(' dan ')}. Pilih siapa yang menjawab ikut perbualan (kadang-kadang kedua-duanya bergilir). SEBELUM setiap giliran bercakap, panggil set_speaker dengan nama kepala itu, kemudian bercakap sebagai dia sahaja; bila bertukar penutur, panggil set_speaker sekali lagi. Jangan sebut nama penutur sebagai label.\n` : '');
 // What Jarvis remembers, read once when a session opens.
 let memory = { facts: [], recent: [] };
 const memoryText = () => S.memory === false ? '' : (memory.facts.length ? `Perkara yang anda ingat tentang ${callName()} (guna secara semula jadi, jangan baca semuanya):\n- ${memory.facts.join('\n- ')}\n` : '')
@@ -406,6 +407,11 @@ const forbidden = () => {
   return names.length ? `- Pengguna telah MEMATIKAN kebenaran untuk: ${names.join('; ')}. Jangan kawal atau baca perkara itu dengan apa cara sekalipun, termasuk skrip, shell, skrin atau papan kekunci. Jika diminta, beritahu ia dimatikan di Tetapan.\n` : '';
 };
 const MOODS = ['neutral', 'happy', 'excited', 'angry', 'sad', 'thinking', 'confused', 'surprised', 'daydreaming', 'wink'];
+// Two heads on one body (CatDog): the model says who talks next, and that head gets the lips and its own pitch.
+let speakerIndex = 0;
+const heads = () => character()?.heads?.length > 1 ? character().heads : null;
+const SPEAKER = { name: 'set_speaker', description: 'Watak dua kepala: pilih siapa yang bercakap seterusnya. Panggil sebelum setiap giliran bercakap.',
+  parameters: { type: 'OBJECT', properties: { who: { type: 'STRING', description: 'Nama kepala yang akan bercakap' } }, required: ['who'] } };
 const EXPRESSION = { name: 'set_expression', description: 'Tukar emosi wajah Jarvis di skrin',
   parameters: { type: 'OBJECT', properties: { mood: { type: 'STRING', description: MOODS.join(', ') } }, required: ['mood'] } };
 
@@ -418,7 +424,7 @@ function applySettings() {
   document.documentElement.style.setProperty('--c', S.theme);
   const ch = character();
   const src = ch ? '/head?c=' + encodeURIComponent(ch.id) : { facepoly: '/facepoly?panel=0', net: '/head?net=1' }[S.face] || '/head';
-  if (!$('face').src.endsWith(src)) $('face').src = src;
+  if (!$('face').src.split('&r=')[0].endsWith(src)) $('face').src = src;
   $('hFace').textContent = ch?.name || { facepoly: 'FacePoly 2D', net: tr('Jaringan') }[S.face] || 'Robot 3D';
   if (MINI) {   // Jarvis Mini: the window is resized by the app, the page is scaled to match
     const scale = MINI_SIZES[S.mini] || 1;
@@ -474,7 +480,7 @@ function play(data) {
   const src = outCtx.createBufferSource();
   src.buffer = buf;
   // shortcut: a higher pitch also speaks a little faster (no pitch shifter), fine for cartoon voices
-  const pitch = character()?.pitch || 1;
+  const pitch = heads()?.[speakerIndex]?.pitch || character()?.pitch || 1;
   src.playbackRate.value = pitch;
   src.connect(analyser);
   nextT = Math.max(nextT, outCtx.currentTime);
@@ -579,6 +585,12 @@ function setMood(m) {
 
 async function runTool(fc) {
   if (fc.name === 'set_expression') { moodByTool = Date.now(); return setMood(fc.args?.mood); }
+  if (fc.name === 'set_speaker') {
+    const i = (heads() || []).findIndex(h => h.name?.toLowerCase() === String(fc.args?.who || '').trim().toLowerCase());
+    if (i < 0) return { error: 'pilihan: ' + (heads() || []).map(h => h.name).join(', ') };
+    speakerIndex = i;
+    return { result: 'ok' };
+  }
   // shortcut: native confirm() pauses audio while it is open, replace with an in-page dialog if that annoys
   const risky = cfg.confirm.includes(fc.name);
   if (risky && !confirm(`Jarvis nak buat ini:\n\n${fc.name}\n${JSON.stringify(fc.args, null, 2)}\n\nBenarkan? (Enter = Ya, Esc = Tidak)`)) {
@@ -666,7 +678,7 @@ async function connect() {
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: character()?.voice || (VOICES.includes(S.voice) ? S.voice : cfg.voice) } } },
     },
     systemInstruction: { parts: [{ text: prompt() }] },
-    tools: [{ functionDeclarations: [...cfg.tools, EXPRESSION] }],   // Gemini's own search and code tools are not available on this model and key
+    tools: [{ functionDeclarations: [...cfg.tools, EXPRESSION, ...(heads() ? [SPEAKER] : [])] }],   // Gemini's own search and code tools are not available on this model and key
     inputAudioTranscription: {},
     outputAudioTranscription: {},
   } });
@@ -706,7 +718,10 @@ async function loadSettings() {
   if (!Object.keys(saved).length) { saveSettings(); return applySettings(); }   // first run: keep what this window had
   S = { ...DEFAULTS, ...saved };
   applySettings();
-  if (ws && before !== S.face + JSON.stringify(character() || '')) { stop(); start(); }   // another window changed the character
+  if (before !== S.face + JSON.stringify(character() || '')) {
+    if (character() && $('face').src.includes('c=')) $('face').src = '/head?c=' + encodeURIComponent(character().id) + '&r=' + Date.now();   // new marks or moves: redraw the face
+    if (ws) { stop(); start(); }   // voice and persona are fixed when a session opens
+  }
   if (S.wake) listenForWake(); else stopWake();
 }
 const saveSettings = () => fetch('/settings', { method: 'POST', body: JSON.stringify(S) });
@@ -1045,6 +1060,7 @@ const wave = $('wave').getContext('2d');
       fp.react({ emotion: on ? mood : 'daydreaming', intensity: on ? 1 : .6, speaking: state === 'SPEAKING' });
       fp.setListening(state === 'LISTENING');
     }
+    fp.setSpeaker?.(speakerIndex);
     if (level > .01) fp.setSpeechLevel(level * 3, bright);
   }
 
