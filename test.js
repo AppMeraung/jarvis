@@ -15,6 +15,7 @@ const SAMPLES = {
   mail_inbox: {}, projects_status: {}, mail_read: { id: 12 }, mail_draft_reply: { id: 12, body: 'Terima kasih' },
   mail_draft: { to: 'ali@example.com', subject: 'Hai', body: 'Apa khabar' },
   whatsapp_message: { phone: '012-345 6789', text: 'Ok, jumpa esok' },
+  organize_plan: {}, organize_apply: { numbers: '1-3' }, organize_undo: {}, organize_rule: { words: 'klinik rambut', folder: '~/Claude/_Dokumen/RR-Clinic' },
   project_audit: {}, old_files: { folder: __dirname, days: 30 }, move_file: { from: __filename, to_folder: path.join(__dirname, 'x') },
   agent_start: { folder: __dirname, task: 'Analisis projek' }, agent_reply: { session: '0d1d1716-45bf-4d36-a1bc-04dc12eb546e', message: 'Guna pg_dump' },
   remember: { fact: 'Tuan suka kopi tanpa gula' }, recall: { query: 'kopi' }, forget: { what: 'kopi' }, ask_claude: { question: 'Apa itu entropi?' },
@@ -129,7 +130,7 @@ test('type_text turns line breaks into Return', () => {
 
 test('dangerous tools are flagged for on-screen confirmation, ordinary ones are not', () => {
   assert.deepStrictEqual([...confirm].sort(),
-    ['agent_start', 'applescript', 'code_agent', 'forget', 'mail_send', 'mail_send_reply', 'move_file', 'open_any', 'restart', 'run_shell', 'shutdown', 'trash_file']);
+    ['agent_start', 'applescript', 'code_agent', 'forget', 'mail_send', 'mail_send_reply', 'move_file', 'open_any', 'organize_apply', 'organize_undo', 'restart', 'run_shell', 'shutdown', 'trash_file']);
   assert.ok(!confirm.includes('open_app'));
 });
 
@@ -180,7 +181,7 @@ test('storage_scan, project_audit and old_files never delete or move anything', 
   for (const [name, args] of [['storage_scan', {}], ['project_audit', {}], ['old_files', { folder: __dirname }]]) {
     assert.ok(!/\b(rm|mv|rmdir|unlink|trash_file|rmSync|unlinkSync|renameSync)\b/.test(plan(name, args)[1].join(' ')), name);
   }
-  assert.deepStrictEqual(slow.sort(), ['old_files', 'project_audit', 'storage_scan']);
+  assert.deepStrictEqual(slow.sort(), ['old_files', 'organize_plan', 'project_audit', 'storage_scan']);
   assert.deepStrictEqual(image, ['see_screen']);
 });
 
@@ -526,4 +527,38 @@ test('the face picks a mood from the words Jarvis says, the latest clue winning'
   assert.strictEqual(pick('Maaf tadi, tapi tahniah Tuan!'), 'happy');   // the later word decides
   assert.strictEqual(pick('Mesyuarat jam tiga petang.'), undefined);
   assert.strictEqual(pick('suka-suka hati'), 'happy');
+});
+
+test('organize: loose files go to their project or company folder, nothing is overwritten, and a batch can be undone', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-home-')), mem = path.join(home, 'mem');
+  const mk = (p, body = 'x') => { fs.mkdirSync(path.dirname(path.join(home, p)), { recursive: true }); fs.writeFileSync(path.join(home, p), body); };
+  for (const d of ['Claude/_Dokumen/KenduriKita', 'Claude/_Dokumen/RR-Clinic', 'Syarikat/ISUKE Travel/Dokumen', 'Syarikat/ISUKE Travel/Media', 'Syarikat/Media Umum/Tangkap Layar', 'Desktop/projek-git/.git']) fs.mkdirSync(path.join(home, d), { recursive: true });
+  mk('Downloads/BORANG_F_ISUKE_PHU_QUOC.docx'); mk('Downloads/isuke-poster.png'); mk('Downloads/Invois KenduriKita Nov.pdf');
+  mk('Desktop/Screenshot 2026-11-11 at 9.58.20 AM.png'); mk('Downloads/Cadangan Klinik Rambut.pdf'); mk('Downloads/resit-lain.pdf');
+  mk('Syarikat/ISUKE Travel/Dokumen/BORANG_F_ISUKE_PHU_QUOC.docx', 'asal');   // same name already there
+  fs.mkdirSync(path.join(home, 'Claude/_Dokumen/iSuke'), { recursive: true }); mk('Downloads/isuke-notes.md');
+  mk('Syarikat/ISUKE Travel/Dokumen/9988776655_okt.pdf'); mk('Downloads/9988776655_nov.pdf'); mk('Desktop/Pasted 1.textClipping');
+  const env = { ...process.env, JARVIS_ORGANIZE_HOME: home, JARVIS_MEMORY: mem };
+  const run = (...a) => execFileSync(process.execPath, [path.join(__dirname, 'organize.js'), ...a], { encoding: 'utf8', env });
+  try {
+    run('rule', 'klinik rambut', '~/Claude/_Dokumen/RR-Clinic');
+    const p = run('plan');
+    assert.match(p, /BORANG_F_ISUKE_PHU_QUOC\.docx  ->  ~\/Syarikat\/ISUKE Travel\/Dokumen\//);
+    assert.match(p, /isuke-notes\.md  ->  ~\/Claude\/_Dokumen\/iSuke\//);   // a note goes to the project, papers to the company
+    assert.match(p, /9988776655_nov\.pdf  ->  ~\/Syarikat\/ISUKE Travel\/Dokumen\/  \[teka/);   // like a file already filed there
+    assert.match(p, /Tidak pasti[\s\S]*Pasted 1\.textClipping/);
+    assert.match(p, /isuke-poster\.png  ->  ~\/Syarikat\/ISUKE Travel\/Media\//);
+    assert.match(p, /Invois KenduriKita Nov\.pdf  ->  ~\/Claude\/_Dokumen\/KenduriKita\//);
+    assert.match(p, /Screenshot .*  ->  ~\/Syarikat\/Media Umum\/Tangkap Layar\//);
+    assert.match(p, /Cadangan Klinik Rambut\.pdf  ->  ~\/Claude\/_Dokumen\/RR-Clinic\/  \[peraturan Tuan/);
+    assert.match(p, /Tidak pasti[\s\S]*resit-lain\.pdf/);
+    assert.doesNotMatch(p, /projek-git/);   // project folders stay put
+    assert.match(run('apply', 'semua'), /6 item dialih\.[\s\S]*sudah ada fail sama nama/);
+    assert.strictEqual(fs.readFileSync(path.join(home, 'Syarikat/ISUKE Travel/Dokumen/BORANG_F_ISUKE_PHU_QUOC.docx'), 'utf8'), 'asal');
+    assert.ok(fs.existsSync(path.join(home, 'Claude/_Dokumen/KenduriKita/Invois KenduriKita Nov.pdf')));
+    assert.match(fs.readFileSync(path.join(home, 'Syarikat/_log-pindahan.tsv'), 'utf8'), /Invois KenduriKita Nov\.pdf\t/);
+    assert.match(run('undo'), /6 item dikembalikan/);
+    assert.ok(fs.existsSync(path.join(home, 'Downloads/Invois KenduriKita Nov.pdf')));
+    assert.throws(() => run('rule', 'x', '/etc'));
+  } finally { fs.rmSync(home, { recursive: true }); }
 });

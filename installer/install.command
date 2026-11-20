@@ -18,7 +18,7 @@ if [ -z "$NODE" ] || [ "$("$NODE" -p 'process.versions.node.split(".")[0]')" -lt
 fi
 
 mkdir -p "$DEST"
-for f in server.js tools.js autopilot.js index.html head facepoly; do rm -rf "$DEST/$f"; cp -R "$SRC/$f" "$DEST/$f"; done
+for f in server.js tools.js autopilot.js organize.js index.html head facepoly; do rm -rf "$DEST/$f"; cp -R "$SRC/$f" "$DEST/$f"; done
 cp "$HERE/uninstall.command" "$DEST/"   # kunci API dan tetapan sedia ada (.env, permissions.json) tidak disentuh
 echo "Jarvis disalin ke: $DEST"
 [ -n "$JARVIS_NO_AGENT" ] && exit 0   # untuk ujian: salin sahaja
